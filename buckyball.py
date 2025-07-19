@@ -146,8 +146,16 @@ def create_goldberg_polyhedron(subdivision_level=1):
 
 # --- Optimized Main Loop ---
 # subdivision_level=1 -> Buckyball, 2 -> 260 faces, 3 -> 980 faces
+SCALE_FACTOR = 250
 polyhedron = create_goldberg_polyhedron(subdivision_level=2)
 angle_x, angle_y = 0, 0
+angle_x_vel, angle_y_vel = 0, 0
+damping = 0.95
+zoom = 1.0
+target_zoom = 1.0
+zoom_speed = 0.1
+zoom_smoothing_factor = 0.1
+rotation_sensitivity = 0.1  # Adjust this value to your liking
 mouse_dragging = False
 
 # --- Pre-computation ---
@@ -173,19 +181,35 @@ face_normals = np.array(face_normals)
 
 
 def main():
-    global angle_x, angle_y, mouse_dragging
+    global angle_x, angle_y, mouse_dragging, angle_x_vel, angle_y_vel, zoom, target_zoom
 
     running = True
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT: running = False
-            elif event.type == pygame.MOUSEBUTTONDOWN: mouse_dragging = True
-            elif event.type == pygame.MOUSEBUTTONUP: mouse_dragging = False
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 1: mouse_dragging = True
+                elif event.button == 4: target_zoom = min(5.0, target_zoom + zoom_speed)
+                elif event.button == 5: target_zoom = max(0.5, target_zoom - zoom_speed)
+            elif event.type == pygame.MOUSEBUTTONUP:
+                if event.button == 1: mouse_dragging = False
             elif event.type == pygame.MOUSEMOTION:
                 if mouse_dragging:
+                    sensitivity = 1 / (SCALE_FACTOR * zoom)
                     rel_x, rel_y = event.rel
-                    angle_y -= rel_x * 0.005
-                    angle_x += rel_y * 0.005
+                    angle_y_vel -= rel_x * sensitivity * rotation_sensitivity
+                    angle_x_vel += rel_y * sensitivity * rotation_sensitivity
+
+        # Update angles with velocity
+        angle_x += angle_x_vel
+        angle_y += angle_y_vel
+
+        # Apply damping to rotation
+        angle_x_vel *= damping
+        angle_y_vel *= damping
+
+        # Smoothly interpolate zoom
+        zoom += (target_zoom - zoom) * zoom_smoothing_factor
 
         screen.fill(BLACK)
 
@@ -217,7 +241,8 @@ def main():
 
         # --- Projection and Depth Calculation ---
         polygons_to_draw = []
-        projected_points = rotated_vertices[:, :2] * 250 + np.array([WIDTH / 2, HEIGHT / 2])
+        # Project points
+        projected_points = rotated_vertices[:, :2] * (SCALE_FACTOR * zoom) + np.array([WIDTH / 2, HEIGHT / 2])
 
         for i, face_idx in enumerate(visible_indices):
             indices = face_indices[face_idx]
@@ -232,6 +257,19 @@ def main():
         for _, projected, color in polygons_to_draw:
             pygame.draw.polygon(screen, color, projected)
             pygame.draw.polygon(screen, EDGE_COLOR, projected, 1)
+
+        # --- Draw Equator ---
+        equator_points_3d = np.array([[math.cos(a), 0, math.sin(a)] for a in np.linspace(0, 2 * math.pi, 100)])
+        rotated_equator = equator_points_3d @ rotation_matrix
+        
+        for i in range(len(rotated_equator) - 1):
+            p1 = rotated_equator[i]
+            p2 = rotated_equator[i+1]
+            # Only draw the front-facing part of the equator
+            if p1[2] > 0 and p2[2] > 0:
+                proj1 = p1[:2] * (250 * zoom) + np.array([WIDTH / 2, HEIGHT / 2])
+                proj2 = p2[:2] * (250 * zoom) + np.array([WIDTH / 2, HEIGHT / 2])
+                pygame.draw.line(screen, (100, 100, 255), proj1, proj2, 1)
 
         pygame.display.flip()
         clock.tick(FPS)
