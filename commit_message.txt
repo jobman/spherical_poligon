@@ -1,1 +1,0 @@
-feat: Implement zoom-dependent rotation and smooth camera controls
