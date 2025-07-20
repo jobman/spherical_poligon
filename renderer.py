@@ -10,6 +10,9 @@ class Renderer:
         self.screen = pygame.display.set_mode((self.width, self.height))
         pygame.display.set_caption("Spherical World")
         self.clock = pygame.time.Clock()
+        self.font = pygame.font.SysFont("monospace", 16)
+        self.debug_mode = False
+
         self.light_source = np.array([0.5, 0.7, -1])
         self.edge_color = (40, 40, 40)
 
@@ -21,6 +24,7 @@ class Renderer:
         self.zoom_speed = 0.1
         self.zoom_smoothing_factor = 0.1
         self.rotation_sensitivity = 0.1
+        self.keyboard_rotation_speed = 0.005
         self.scale_factor = 250
         self.mouse_dragging = False
 
@@ -38,7 +42,10 @@ class Renderer:
         pygame.quit()
 
     def handle_input(self, event):
-        if event.type == pygame.MOUSEBUTTONDOWN:
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_F3:
+                self.debug_mode = not self.debug_mode
+        elif event.type == pygame.MOUSEBUTTONDOWN:
             if event.button == 1:
                 self.mouse_dragging = True
             elif event.button == 4:
@@ -57,8 +64,24 @@ class Renderer:
                 self.angle_x_vel += rel_y * sensitivity * self.rotation_sensitivity
 
     def update(self):
+        keys = pygame.key.get_pressed()
+        if keys[pygame.K_w]:
+            self.angle_x_vel += self.keyboard_rotation_speed
+        if keys[pygame.K_s]:
+            self.angle_x_vel -= self.keyboard_rotation_speed
+        if keys[pygame.K_a]:
+            self.angle_y_vel += self.keyboard_rotation_speed
+        if keys[pygame.K_d]:
+            self.angle_y_vel -= self.keyboard_rotation_speed
+
         self.angle_x += self.angle_x_vel
         self.angle_y += self.angle_y_vel
+
+        # Keep angles in the [0, 2*pi] range
+        two_pi = 2 * math.pi
+        self.angle_x = self.angle_x % two_pi
+        self.angle_y = self.angle_y % two_pi
+
         self.angle_x_vel *= self.damping
         self.angle_y_vel *= self.damping
         self.zoom += (self.target_zoom - self.zoom) * self.zoom_smoothing_factor
@@ -66,59 +89,67 @@ class Renderer:
     def draw(self):
         self.screen.fill((0, 0, 0))
 
+        # --- Create rotation matrix from user input ---
         cos_x, sin_x = math.cos(self.angle_x), math.sin(self.angle_x)
         cos_y, sin_y = math.cos(self.angle_y), math.sin(self.angle_y)
-        rot_x = np.array([[1,0,0],[0,cos_x,-sin_x],[0,sin_x,cos_x]])
-        rot_y = np.array([[cos_y,0,sin_y],[0,1,0],[-sin_y,0,cos_y]])
+        rot_x = np.array([[1, 0, 0], [0, cos_x, -sin_x], [0, sin_x, cos_x]])
+        rot_y = np.array([[cos_y, 0, sin_y], [0, 1, 0], [-sin_y, 0, cos_y]])
         rotation_matrix = rot_y @ rot_x
 
-        # --- Vectorized Operations ---
+        # --- Rotate vertices and normals ---
         rotated_vertices = self.world.original_vertices @ rotation_matrix
         rotated_normals = self.world.face_normals @ rotation_matrix
 
-        # --- Culling ---
-        visible_faces_mask = rotated_normals[:, 2] >= 0
+        # --- Back-face culling ---
+        visible_faces_mask = rotated_normals[:, 2] > 0
         visible_indices = np.where(visible_faces_mask)[0]
 
-        if len(visible_indices) == 0:
-            pygame.display.flip()
-            self.clock.tick(self.fps)
-            return
+        if visible_indices.any():
+            # --- Process only visible faces ---
+            visible_normals = rotated_normals[visible_indices]
+            visible_colors = self.world.face_colors[visible_indices]
 
-        # --- Lighting for Visible Faces ---
-        intensities = np.dot(rotated_normals[visible_indices], -self.light_source)
-        np.clip(intensities, 0.2, 1.0, out=intensities)
-        final_colors = (self.world.face_colors[visible_indices] * intensities[:, np.newaxis]).astype(int)
+            # --- Lighting ---
+            light_source = np.array([0.3, 0.5, -0.8])
+            light_source /= np.linalg.norm(light_source)
+            
+            intensities = np.dot(visible_normals, -light_source)
+            np.clip(intensities, 0.3, 1.0, out=intensities)
+            final_colors = (visible_colors * intensities[:, np.newaxis]).astype(int)
+            np.clip(final_colors, 0, 255, out=final_colors)
 
-        # --- Projection and Depth Calculation ---
-        polygons_to_draw = []
-        projected_points = rotated_vertices[:, :2] * (self.scale_factor * self.zoom) + np.array([self.width / 2, self.height / 2])
+            # --- Projection and Depth Sorting ---
+            polygons_to_draw = []
+            projected_points = rotated_vertices[:, :2] * (self.scale_factor * self.zoom) + np.array([self.width / 2, self.height / 2])
 
-        for i, face_idx in enumerate(visible_indices):
-            indices = self.world.face_indices[face_idx]
-            depth = np.mean(rotated_vertices[indices, 2])
-            projected = projected_points[indices]
-            color = final_colors[i]
-            polygons_to_draw.append((depth, projected, color))
+            for i, face_idx in enumerate(visible_indices):
+                indices = self.world.face_indices[face_idx]
+                depth = np.mean(rotated_vertices[indices, 2])
+                projected = projected_points[indices]
+                polygons_to_draw.append((depth, projected, final_colors[i]))
 
-        # --- Sorting and Drawing ---
-        polygons_to_draw.sort(key=lambda x: x[0], reverse=True)
+            polygons_to_draw.sort(key=lambda x: x[0], reverse=True)
 
-        for _, projected, color in polygons_to_draw:
-            pygame.draw.polygon(self.screen, color, projected)
-            pygame.draw.polygon(self.screen, self.edge_color, projected, 1)
+            # --- Drawing ---
+            for _, projected, color in polygons_to_draw:
+                pygame.draw.polygon(self.screen, color, projected)
+                pygame.draw.polygon(self.screen, self.edge_color, projected, 1)
 
-        # Draw Equator
-        equator_points_3d = np.array([[math.cos(a), 0, math.sin(a)] for a in np.linspace(0, 2 * math.pi, 100)])
-        rotated_equator = equator_points_3d @ rotation_matrix
-        
-        for i in range(len(rotated_equator) - 1):
-            p1 = rotated_equator[i]
-            p2 = rotated_equator[i+1]
-            if p1[2] > 0 and p2[2] > 0:
-                proj1 = p1[:2] * (self.scale_factor * self.zoom) + np.array([self.width / 2, self.height / 2])
-                proj2 = p2[:2] * (self.scale_factor * self.zoom) + np.array([self.width / 2, self.height / 2])
-                pygame.draw.line(self.screen, (100, 100, 255), proj1, proj2, 1)
+        if self.debug_mode:
+            self.draw_debug_info()
 
         pygame.display.flip()
         self.clock.tick(self.fps)
+
+    def draw_debug_info(self):
+        fps_text = f"FPS: {self.clock.get_fps():.2f}"
+        angle_text_x = f"Angle X: {math.degrees(self.angle_x):.2f}"
+        angle_text_y = f"Angle Y: {math.degrees(self.angle_y):.2f}"
+        
+        fps_surface = self.font.render(fps_text, True, (255, 255, 255))
+        angle_x_surface = self.font.render(angle_text_x, True, (255, 255, 255))
+        angle_y_surface = self.font.render(angle_text_y, True, (255, 255, 255))
+        
+        self.screen.blit(fps_surface, (10, 10))
+        self.screen.blit(angle_x_surface, (10, 30))
+        self.screen.blit(angle_y_surface, (10, 50))

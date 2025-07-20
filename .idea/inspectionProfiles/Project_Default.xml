@@ -1,0 +1,44 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="Eslint" enabled="true" level="WARNING" enabled_by_default="true" />
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <value>
+          <list size="23">
+            <item index="0" class="java.lang.String" itemvalue="more-itertools" />
+            <item index="1" class="java.lang.String" itemvalue="art_mgraph" />
+            <item index="2" class="java.lang.String" itemvalue="scipy" />
+            <item index="3" class="java.lang.String" itemvalue="pymongo" />
+            <item index="4" class="java.lang.String" itemvalue="art-bill" />
+            <item index="5" class="java.lang.String" itemvalue="joblib" />
+            <item index="6" class="java.lang.String" itemvalue="python-Levenshtein" />
+            <item index="7" class="java.lang.String" itemvalue="faiss-cpu" />
+            <item index="8" class="java.lang.String" itemvalue="opencv-python" />
+            <item index="9" class="java.lang.String" itemvalue="scikit_learn" />
+            <item index="10" class="java.lang.String" itemvalue="unidecode" />
+            <item index="11" class="java.lang.String" itemvalue="taskapi" />
+            <item index="12" class="java.lang.String" itemvalue="requests" />
+            <item index="13" class="java.lang.String" itemvalue="grpcio-tools" />
+            <item index="14" class="java.lang.String" itemvalue="numpy" />
+            <item index="15" class="java.lang.String" itemvalue="ImageServerClient" />
+            <item index="16" class="java.lang.String" itemvalue="pandas" />
+            <item index="17" class="java.lang.String" itemvalue="onnxruntime" />
+            <item index="18" class="java.lang.String" itemvalue="cmake" />
+            <item index="19" class="java.lang.String" itemvalue="grpcio" />
+            <item index="20" class="java.lang.String" itemvalue="gitpython" />
+            <item index="21" class="java.lang.String" itemvalue="Cython" />
+            <item index="22" class="java.lang.String" itemvalue="python-jose" />
+          </list>
+        </value>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyUnresolvedReferencesInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredIdentifiers">
+        <list>
+          <option value="BaseException.get" />
+        </list>
+      </option>
+    </inspection_tool>
+  </profile>
+</component>
