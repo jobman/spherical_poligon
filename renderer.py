@@ -60,20 +60,22 @@ class Renderer:
             if self.mouse_dragging:
                 sensitivity = 1 / (self.scale_factor * self.zoom)
                 rel_x, rel_y = event.rel
-                inversion_factor = 1 if math.cos(self.angle_x) >= 0 else -1
+                inversion_factor = -1 if math.cos(self.angle_x) >= 0 else 1
                 self.angle_y_vel -= rel_x * sensitivity * self.rotation_sensitivity * inversion_factor
                 self.angle_x_vel += rel_y * sensitivity * self.rotation_sensitivity
 
     def update(self):
         keys = pygame.key.get_pressed()
+        inversion_factor = -1 if math.cos(self.angle_x) >= 0 else 1
+
         if keys[pygame.K_w]:
             self.angle_x_vel += self.keyboard_rotation_speed
         if keys[pygame.K_s]:
             self.angle_x_vel -= self.keyboard_rotation_speed
         if keys[pygame.K_a]:
-            self.angle_y_vel += self.keyboard_rotation_speed
+            self.angle_y_vel += self.keyboard_rotation_speed * inversion_factor
         if keys[pygame.K_d]:
-            self.angle_y_vel -= self.keyboard_rotation_speed
+            self.angle_y_vel -= self.keyboard_rotation_speed * inversion_factor
 
         self.angle_x += self.angle_x_vel
         self.angle_y += self.angle_y_vel
