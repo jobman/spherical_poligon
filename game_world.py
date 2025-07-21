@@ -10,15 +10,18 @@ import random
 from river_generator import RiverGenerator
 
 class GameWorld:
-    def __init__(self, subdivision_level=2):
+    def __init__(self, subdivision_level=4):
         self.subdivision_level = subdivision_level
         self.tiles = []
-        self.vertices = []
-        self.vertex_to_index = {}
+        self.vertices = [] # Tile vertices
         self.vert_to_tiles = defaultdict(list)
         self.vert_neighbors = defaultdict(list)
-        self.river_downstream_map = {}
-        self.river_vertex_flow = defaultdict(float)
+
+        # Unified geometry for rendering
+        self.original_vertices = np.array([])
+        self.face_indices = []
+        self.face_colors = np.array([])
+        self.face_normals = np.array([])
 
         cache_filename = f"world_cache_level_{self.subdivision_level}.pkl"
 
@@ -27,29 +30,47 @@ class GameWorld:
             with open(cache_filename, 'rb') as f:
                 data = pickle.load(f)
                 self.__dict__.update(data)
-            self._build_neighbor_graph() # Rebuild transient data
-            if not hasattr(self, 'river_downstream_map'):
-                print("Warning: Cache is from an older version. Rivers will be generated for this session only.")
-                print(f"Delete '{cache_filename}' to regenerate and cache a new world with rivers.")
-                self._build_vertex_neighbors()
-                self._generate_rivers()
         else:
             print("Generating new world geometry...")
             self._create_goldberg_polyhedron()
             self._generate_terrain()
             self._build_vertex_neighbors()
-            self._generate_rivers()
-
-            self.original_vertices = np.array([v.to_np() for v in self.vertices])
-            self.face_indices = [[self.vertices.index(v) for v in tile.vertices] for tile in self.tiles]
-            self.face_colors = np.array([tile.color for tile in self.tiles])
-            self.face_normals = np.array([tile.normal for tile in self.tiles])
+            river_verts, river_faces, river_normals = self._generate_rivers()
+            self._combine_geometry(river_verts, river_faces, river_normals)
 
             print(f"Saving world to cache: {cache_filename}")
+            # Don't save transient data like vert_to_tiles
+            transient_data = {"vert_to_tiles": self.vert_to_tiles, "vert_neighbors": self.vert_neighbors}
+            del self.vert_to_tiles
+            del self.vert_neighbors
             with open(cache_filename, 'wb') as f:
                 pickle.dump(self.__dict__, f)
+            # Restore transient data
+            self.vert_to_tiles = transient_data["vert_to_tiles"]
+            self.vert_neighbors = transient_data["vert_neighbors"]
+
+    def _combine_geometry(self, river_verts, river_faces, river_normals):
+        print("Combining tile and river geometry...")
+        tile_vertices_np = np.array([v.to_np() for v in self.vertices])
+        river_vertices_np = np.array([v.to_np() for v in river_verts])
+
+        # Combine vertices
+        self.original_vertices = np.vstack([tile_vertices_np, river_vertices_np])
         
-        self.vertex_to_index = {v: i for i, v in enumerate(self.vertices)}
+        # Combine faces (adjusting indices for rivers)
+        tile_faces = [[self.vertices.index(v) for v in tile.vertices] for tile in self.tiles]
+        river_faces_adjusted = (np.array(river_faces) + len(self.vertices)).tolist()
+        self.face_indices = tile_faces + river_faces_adjusted
+
+        # Combine colors
+        tile_colors = np.array([tile.color for tile in self.tiles])
+        river_color = np.array([60, 120, 200]) # Same as in renderer
+        river_colors = np.tile(river_color, (len(river_faces), 1))
+        self.face_colors = np.vstack([tile_colors, river_colors])
+
+        # Combine normals
+        tile_normals = np.array([tile.normal for tile in self.tiles])
+        self.face_normals = np.vstack([tile_normals, river_normals])
 
     def _generate_terrain(self):
         self._build_neighbor_graph()
@@ -80,21 +101,19 @@ class GameWorld:
                 vert_neighbors_sets[v2].add(v1)
         self.vert_neighbors = {v: list(neighbors) for v, neighbors in vert_neighbors_sets.items()}
 
-    def _generate_rivers(self, num_rivers=75):
+    def _generate_rivers(self, num_rivers=150):
         print(f"Generating rivers...")
-        if not self.vert_neighbors:
-            self._build_vertex_neighbors()
         river_gen = RiverGenerator(self.vertices, self.vert_to_tiles, self.vert_neighbors)
-        self.river_downstream_map, self.river_vertex_flow = river_gen.generate_rivers(num_rivers)
+        return river_gen.generate_rivers(num_rivers)
 
     def _assign_terrain_and_heights(self):
         print("Assigning terrain and heights...")
-        land_noise = PerlinNoise(octaves=8, seed=1) # Even more complex landmasses
-        height_noise = PerlinNoise(octaves=12, seed=2) # Even more varied terrain
+        land_noise = PerlinNoise(octaves=8, seed=1)
+        height_noise = PerlinNoise(octaves=12, seed=2)
 
         for tile in self.tiles:
             tile_center = np.mean([v.to_np() for v in tile.vertices], axis=0)
-            is_land = land_noise((tile_center * 0.5).tolist()) > 0.05 # More land, more distinct continents
+            is_land = land_noise((tile_center * 0.5).tolist()) > 0.05
             lat = math.asin(tile_center[1]) * 180 / math.pi
 
             if is_land:
