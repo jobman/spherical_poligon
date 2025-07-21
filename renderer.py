@@ -60,7 +60,7 @@ class Renderer:
             if self.mouse_dragging:
                 sensitivity = 1 / (self.scale_factor * self.zoom)
                 rel_x, rel_y = event.rel
-                inversion_factor = -1 if math.cos(self.angle_x) >= 0 else 1
+                inversion_factor = 1 if math.cos(self.angle_x) >= 0 else -1
                 self.angle_y_vel -= rel_x * sensitivity * self.rotation_sensitivity * inversion_factor
                 self.angle_x_vel += rel_y * sensitivity * self.rotation_sensitivity
 
