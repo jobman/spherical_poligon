@@ -1,4 +1,3 @@
-
 import random
 from collections import defaultdict
 import numpy as np
@@ -44,18 +43,14 @@ class RiverGenerator:
 
             for _ in range(200):
                 if current_vertex in self.downstream_map: break
-
                 neighbors = self.vert_neighbors[current_vertex]
                 valid_neighbors = [n for n in neighbors if n not in path]
-
                 sea_neighbors = [n for n in valid_neighbors if self.vertex_terrain[n] == 'sea']
                 if sea_neighbors:
                     next_vertex = random.choice(sea_neighbors)
                     self.downstream_map[current_vertex] = next_vertex
                     break
-
                 if not valid_neighbors: break
-                
                 next_vertex = random.choice(valid_neighbors)
                 self.downstream_map[current_vertex] = next_vertex
                 river_vertices.add(next_vertex)
@@ -65,14 +60,11 @@ class RiverGenerator:
     def _calculate_flow(self):
         in_degree = defaultdict(int)
         all_river_verts = set(self.downstream_map.keys()) | set(self.downstream_map.values())
-
         for u, v in self.downstream_map.items():
             in_degree[v] += 1
-
         queue = [v for v in all_river_verts if in_degree[v] == 0]
         for v in queue:
             self.vertex_flow[v] = 1.0
-
         head = 0
         while head < len(queue):
             u = queue[head]; head += 1
@@ -82,79 +74,88 @@ class RiverGenerator:
                 in_degree[v] -= 1
                 if in_degree[v] == 0: queue.append(v)
 
-    def _create_river_geometry(self):
+    def _create_continuous_river_geometry(self):
         river_verts = []
         river_faces = []
         river_normals = []
         vert_map = {}
 
-        def get_or_add_vert(v_pos):
-            key = tuple(round(c, 5) for c in v_pos)
-            if key in vert_map:
-                return vert_map[key]
-            idx = len(river_verts)
-            river_verts.append(Vertex(v_pos[0], v_pos[1], v_pos[2]))
-            vert_map[key] = idx
-            return idx
+        # 1. Reconstruct full river paths
+        paths = []
+        sources = {v for v in self.downstream_map if v not in self.downstream_map.values()}
+        for source in sources:
+            path = [source]
+            curr = source
+            while curr in self.downstream_map:
+                curr = self.downstream_map[curr]
+                path.append(curr)
+            if len(path) > 1: paths.append(path)
 
         max_flow = max(self.vertex_flow.values()) if self.vertex_flow else 1.0
+        elevation = 0.99 # Final elevation factor
 
-        for u, v in self.downstream_map.items():
-            flow = self.vertex_flow.get(v, 1.0)
-            # Remapped width for better visual scaling
-            width = 0.002 + (0.01 * (flow / max_flow))
+        for path in paths:
+            path_strip_indices = []
+            for i, v_node in enumerate(path):
+                # 2. Calculate smoothed tangent
+                v_pos = v_node.to_np()
+                if i == 0: # Source
+                    tangent = (path[i+1].to_np() - v_pos)
+                elif i == len(path) - 1: # Mouth
+                    tangent = (v_pos - path[i-1].to_np())
+                else: # Middle segment
+                    vec_in = v_pos - path[i-1].to_np()
+                    vec_out = path[i+1].to_np() - v_pos
+                    tangent = (vec_in / np.linalg.norm(vec_in) + vec_out / np.linalg.norm(vec_out)) / 2
+                tangent /= np.linalg.norm(tangent)
 
-            u_pos, v_pos = u.to_np(), v.to_np()
-            
-            # The normal of the sphere surface at the midpoint of the segment
-            up_vec = (u_pos + v_pos) / 2
-            up_vec /= np.linalg.norm(up_vec)
-            
-            flow_dir = v_pos - u_pos
-            flow_dir /= np.linalg.norm(flow_dir)
-            
-            # A vector pointing to the side of the river
-            side_vec = np.cross(up_vec, flow_dir)
-            side_vec /= np.linalg.norm(side_vec)
+                # 3. Create side vector and quad vertices
+                up_vec = v_pos / np.linalg.norm(v_pos)
+                side_vec = np.cross(tangent, up_vec)
+                side_vec /= np.linalg.norm(side_vec)
+                
+                flow = self.vertex_flow.get(v_node, 1.0)
+                width = 0.002 + (0.01 * (flow / max_flow))
 
-            # Define the 4 corners of the river quad
-            p1 = u_pos - side_vec * width / 2
-            p2 = u_pos + side_vec * width / 2
-            p3 = v_pos + side_vec * width / 2
-            p4 = v_pos - side_vec * width / 2
+                v_left_pos = v_pos - side_vec * width / 2
+                v_right_pos = v_pos + side_vec * width / 2
 
-            # Project corners back onto the sphere and slightly elevate them
-            elevation = 0.99
-            p1 = p1 / np.linalg.norm(p1) * elevation
-            p2 = p2 / np.linalg.norm(p2) * elevation
-            p3 = p3 / np.linalg.norm(p3) * elevation
-            p4 = p4 / np.linalg.norm(p4) * elevation
+                # Elevate and add to geometry
+                v_left_pos = v_left_pos / np.linalg.norm(v_left_pos) * elevation
+                v_right_pos = v_right_pos / np.linalg.norm(v_right_pos) * elevation
 
-            idx1, idx2, idx3, idx4 = get_or_add_vert(p1), get_or_add_vert(p2), get_or_add_vert(p3), get_or_add_vert(p4)
+                left_idx = len(river_verts)
+                river_verts.append(Vertex(*v_left_pos))
+                right_idx = len(river_verts)
+                river_verts.append(Vertex(*v_right_pos))
+                path_strip_indices.append((left_idx, right_idx))
 
-            # Create two triangles from the quad with the correct winding order (CCW)
-            face1 = [idx1, idx2, idx3]
-            face2 = [idx1, idx3, idx4]
-            river_faces.extend([face1, face2])
+            # 4. Create faces from the strip
+            for i in range(len(path_strip_indices) - 1):
+                l1, r1 = path_strip_indices[i]
+                l2, r2 = path_strip_indices[i+1]
+                
+                # Triangle 1: (l1, r1, r2)
+                face1 = [l1, r1, r2]
+                # Triangle 2: (l1, r2, l2)
+                face2 = [l1, r2, l2]
+                river_faces.extend([face1, face2])
 
-            # The normal should be the same as the surface normal
-            normal1 = np.cross(p3 - p1, p2 - p1)
-            normal1 /= np.linalg.norm(normal1)
-            
-            normal2 = np.cross(p4 - p1, p3 - p1)
-            normal2 /= np.linalg.norm(normal2)
-
-            river_normals.extend([normal1, normal2])
+                # 5. Calculate normals
+                v_l1, v_r1, v_r2, v_l2 = river_verts[l1].to_np(), river_verts[r1].to_np(), river_verts[r2].to_np(), river_verts[l2].to_np()
+                normal1 = np.cross(v_r1 - v_l1, v_r2 - v_l1)
+                normal2 = np.cross(v_r2 - v_l1, v_l2 - v_l1)
+                normal1 /= np.linalg.norm(normal1)
+                normal2 /= np.linalg.norm(normal2)
+                river_normals.extend([normal1, normal2])
 
         return river_verts, river_faces, np.array(river_normals)
 
     def generate_rivers(self, num_rivers=75):
         self._classify_vertices()
         sources = self._find_inland_sources(num_rivers)
-        
         print(f"Generating river network from {len(sources)} sources...")
         self._build_flow_network(sources)
         self._calculate_flow()
-        
-        print("Creating river 3D geometry...")
-        return self._create_river_geometry()
+        print("Creating continuous river 3D geometry...")
+        return self._create_continuous_river_geometry()
