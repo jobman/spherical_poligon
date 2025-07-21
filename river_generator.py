@@ -2,6 +2,7 @@ import random
 from collections import defaultdict
 import numpy as np
 from geometry import Vertex
+import config as cfg
 
 class RiverGenerator:
     def __init__(self, vertices, vert_to_tiles, vert_neighbors):
@@ -92,7 +93,7 @@ class RiverGenerator:
             if len(path) > 1: paths.append(path)
 
         max_flow = max(self.vertex_flow.values()) if self.vertex_flow else 1.0
-        elevation = 0.99 # Final elevation factor
+        elevation = cfg.RIVER_ELEVATION # Final elevation factor
 
         for path in paths:
             path_strip_indices = []
@@ -115,7 +116,7 @@ class RiverGenerator:
                 side_vec /= np.linalg.norm(side_vec)
                 
                 flow = self.vertex_flow.get(v_node, 1.0)
-                width = 0.002 + (0.01 * (flow / max_flow))
+                width = cfg.RIVER_BASE_WIDTH + (cfg.RIVER_WIDTH_FACTOR * (flow / max_flow))
 
                 v_left_pos = v_pos - side_vec * width / 2
                 v_right_pos = v_pos + side_vec * width / 2

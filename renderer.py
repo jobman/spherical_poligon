@@ -1,30 +1,31 @@
 import pygame
 import math
 import numpy as np
+import config as cfg
 
 class Renderer:
     def __init__(self, world):
         self.world = world
-        self.width, self.height = 800, 600
-        self.fps = 60
+        self.width, self.height = cfg.SCREEN_WIDTH, cfg.SCREEN_HEIGHT
+        self.fps = cfg.FPS
         self.screen = pygame.display.set_mode((self.width, self.height))
-        pygame.display.set_caption("Spherical World - 3D Rivers")
+        pygame.display.set_caption(cfg.CAPTION)
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont("monospace", 16)
         self.debug_mode = False
 
-        self.edge_color = (40, 40, 40)
+        self.edge_color = cfg.EDGE_COLOR
 
         self.angle_x, self.angle_y = 0, 0
         self.angle_x_vel, self.angle_y_vel = 0, 0
-        self.damping = 0.95
+        self.damping = cfg.DAMPING
         self.zoom = 1.0
         self.target_zoom = 1.0
-        self.zoom_speed = 0.1
-        self.zoom_smoothing_factor = 0.1
-        self.rotation_sensitivity = 0.1
-        self.keyboard_rotation_speed = 0.005
-        self.scale_factor = 250
+        self.zoom_speed = cfg.ZOOM_SPEED
+        self.zoom_smoothing_factor = cfg.ZOOM_SMOOTHING_FACTOR
+        self.rotation_sensitivity = cfg.ROTATION_SENSITIVITY
+        self.keyboard_rotation_speed = cfg.KEYBOARD_ROTATION_SPEED
+        self.scale_factor = cfg.INITIAL_SCALE_FACTOR
         self.mouse_dragging = False
 
     def run(self):
@@ -48,9 +49,9 @@ class Renderer:
             if event.button == 1:
                 self.mouse_dragging = True
             elif event.button == 4:
-                self.target_zoom = min(5.0, self.target_zoom + self.zoom_speed)
+                self.target_zoom = min(cfg.MAX_ZOOM, self.target_zoom + self.zoom_speed)
             elif event.button == 5:
-                self.target_zoom = max(0.5, self.target_zoom - self.zoom_speed)
+                self.target_zoom = max(cfg.MIN_ZOOM, self.target_zoom - self.zoom_speed)
         elif event.type == pygame.MOUSEBUTTONUP:
             if event.button == 1:
                 self.mouse_dragging = False
@@ -82,7 +83,7 @@ class Renderer:
         self.zoom += (self.target_zoom - self.zoom) * self.zoom_smoothing_factor
 
     def draw(self):
-        self.screen.fill((0, 0, 0))
+        self.screen.fill(cfg.BACKGROUND_COLOR)
 
         # --- Create rotation matrix ---
         cos_x, sin_x = math.cos(self.angle_x), math.sin(self.angle_x)
@@ -109,11 +110,10 @@ class Renderer:
         visible_colors = self.world.face_colors[visible_indices]
 
         # --- Lighting ---
-        light_source = np.array([0.3, 0.5, -0.8])
-        light_source /= np.linalg.norm(light_source)
+        light_source = cfg.LIGHT_SOURCE_VECTOR / np.linalg.norm(cfg.LIGHT_SOURCE_VECTOR)
         
         intensities = np.dot(visible_normals, -light_source)
-        np.clip(intensities, 0.3, 1.0, out=intensities)
+        np.clip(intensities, cfg.AMBIENT_LIGHT, 1.0, out=intensities)
         final_colors = (visible_colors * intensities[:, np.newaxis]).astype(int)
         np.clip(final_colors, 0, 255, out=final_colors)
 
