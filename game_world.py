@@ -7,6 +7,7 @@ import pickle
 import os
 from perlin_noise import PerlinNoise
 import random
+from river_generator import RiverGenerator
 
 class GameWorld:
     def __init__(self, subdivision_level=2):
@@ -15,6 +16,9 @@ class GameWorld:
         self.vertices = []
         self.vertex_to_index = {}
         self.vert_to_tiles = defaultdict(list)
+        self.vert_neighbors = defaultdict(list)
+        self.river_downstream_map = {}
+        self.river_vertex_flow = defaultdict(float)
 
         cache_filename = f"world_cache_level_{self.subdivision_level}.pkl"
 
@@ -24,10 +28,17 @@ class GameWorld:
                 data = pickle.load(f)
                 self.__dict__.update(data)
             self._build_neighbor_graph() # Rebuild transient data
+            if not hasattr(self, 'river_downstream_map'):
+                print("Warning: Cache is from an older version. Rivers will be generated for this session only.")
+                print(f"Delete '{cache_filename}' to regenerate and cache a new world with rivers.")
+                self._build_vertex_neighbors()
+                self._generate_rivers()
         else:
             print("Generating new world geometry...")
             self._create_goldberg_polyhedron()
             self._generate_terrain()
+            self._build_vertex_neighbors()
+            self._generate_rivers()
 
             self.original_vertices = np.array([v.to_np() for v in self.vertices])
             self.face_indices = [[self.vertices.index(v) for v in tile.vertices] for tile in self.tiles]
@@ -57,6 +68,24 @@ class GameWorld:
                 for neighbor in self.vert_to_tiles[v]:
                     if neighbor != tile and neighbor not in tile.neighbors:
                         tile.neighbors.append(neighbor)
+
+    def _build_vertex_neighbors(self):
+        print("Building vertex neighbor graph...")
+        vert_neighbors_sets = defaultdict(set)
+        for tile in self.tiles:
+            for i in range(len(tile.vertices)):
+                v1 = tile.vertices[i]
+                v2 = tile.vertices[(i + 1) % len(tile.vertices)]
+                vert_neighbors_sets[v1].add(v2)
+                vert_neighbors_sets[v2].add(v1)
+        self.vert_neighbors = {v: list(neighbors) for v, neighbors in vert_neighbors_sets.items()}
+
+    def _generate_rivers(self, num_rivers=75):
+        print(f"Generating rivers...")
+        if not self.vert_neighbors:
+            self._build_vertex_neighbors()
+        river_gen = RiverGenerator(self.vertices, self.vert_to_tiles, self.vert_neighbors)
+        self.river_downstream_map, self.river_vertex_flow = river_gen.generate_rivers(num_rivers)
 
     def _assign_terrain_and_heights(self):
         print("Assigning terrain and heights...")

@@ -37,6 +37,9 @@ class Tile:
         self.__dict__.update(state)
         self.neighbors = []
 
+    def is_water(self):
+        return self.terrain_type in [TerrainType.OCEAN, TerrainType.COAST, TerrainType.ICE]
+
     @property
     def color(self):
         return np.array(self.terrain_type.value) if self.terrain_type else np.array([200, 200, 200])

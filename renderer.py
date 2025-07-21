@@ -15,6 +15,7 @@ class Renderer:
 
         self.light_source = np.array([0.5, 0.7, -1])
         self.edge_color = (40, 40, 40)
+        self.river_color = (60, 120, 200) # A slightly different blue
 
         self.angle_x, self.angle_y = 0, 0
         self.angle_x_vel, self.angle_y_vel = 0, 0
@@ -86,6 +87,31 @@ class Renderer:
         self.angle_y_vel *= self.damping
         self.zoom += (self.target_zoom - self.zoom) * self.zoom_smoothing_factor
 
+    def _draw_rivers(self, rotated_vertices, projected_points):
+        river_segments = []
+        for start_v, end_v in self.world.river_downstream_map.items():
+            start_idx = self.world.vertex_to_index.get(start_v)
+            end_idx = self.world.vertex_to_index.get(end_v)
+
+            if start_idx is None or end_idx is None:
+                continue
+
+            # Culling: only draw if both ends of the segment are visible
+            if rotated_vertices[start_idx, 2] > 0 and rotated_vertices[end_idx, 2] > 0:
+                flow = self.world.river_vertex_flow.get(end_v, 1.0)
+                width = int(2 + math.log(1 + flow) * 1.5)
+                width = min(width, 10)
+                
+                p1 = projected_points[start_idx]
+                p2 = projected_points[end_idx]
+                depth = (rotated_vertices[start_idx, 2] + rotated_vertices[end_idx, 2]) / 2
+                river_segments.append((depth, p1, p2, width))
+
+        river_segments.sort(key=lambda x: x[0], reverse=True)
+
+        for _, p1, p2, width in river_segments:
+            pygame.draw.line(self.screen, self.river_color, p1, p2, width)
+
     def draw(self):
         self.screen.fill((0, 0, 0))
 
@@ -134,6 +160,9 @@ class Renderer:
             for _, projected, color in polygons_to_draw:
                 pygame.draw.polygon(self.screen, color, projected)
                 pygame.draw.polygon(self.screen, self.edge_color, projected, 1)
+            
+            # --- Draw Rivers on top of terrain ---
+            self._draw_rivers(rotated_vertices, projected_points)
 
         if self.debug_mode:
             self.draw_debug_info()
@@ -145,11 +174,14 @@ class Renderer:
         fps_text = f"FPS: {self.clock.get_fps():.2f}"
         angle_text_x = f"Angle X: {math.degrees(self.angle_x):.2f}"
         angle_text_y = f"Angle Y: {math.degrees(self.angle_y):.2f}"
+        river_count_text = f"River Segments: {len(self.world.river_downstream_map)}"
         
         fps_surface = self.font.render(fps_text, True, (255, 255, 255))
         angle_x_surface = self.font.render(angle_text_x, True, (255, 255, 255))
         angle_y_surface = self.font.render(angle_text_y, True, (255, 255, 255))
+        river_count_surface = self.font.render(river_count_text, True, (255, 255, 255))
         
         self.screen.blit(fps_surface, (10, 10))
         self.screen.blit(angle_x_surface, (10, 30))
         self.screen.blit(angle_y_surface, (10, 50))
+        self.screen.blit(river_count_surface, (10, 70))
