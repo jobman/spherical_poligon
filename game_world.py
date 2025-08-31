@@ -17,15 +17,19 @@ class GameWorld:
     def __init__(self, subdivision_level=cfg.SUBDIVISION_LEVEL):
         self.subdivision_level = subdivision_level
         self.tiles = []
-        self.vertices = [] # Tile vertices
+        self.vertices = [] # Tile vertices, also used for river graph
         self.vert_to_tiles = defaultdict(list)
         self.vert_neighbors = defaultdict(list)
 
-        # Unified geometry for rendering
+        # Unified geometry for rendering tiles
         self.original_vertices = np.array([])
         self.face_indices = []
         self.face_colors = np.array([])
         self.face_normals = np.array([])
+
+        # River data
+        self.river_paths = []
+        self.river_flow = {}
 
         cache_filename = f"world_cache_level_{self.subdivision_level}.pkl"
 
@@ -34,17 +38,21 @@ class GameWorld:
             with open(cache_filename, 'rb') as f:
                 data = pickle.load(f)
                 self.__dict__.update(data)
+            # Rebuild transient data that is not saved in cache
+            self._build_neighbor_graph()
+            self._build_vertex_neighbors()
         else:
             print("Generating new world geometry...")
             self._create_geometry()
             self._generate_terrain()
             self._build_vertex_neighbors()
-            river_verts, river_faces, river_normals = self._generate_rivers()
-            self._combine_geometry(river_verts, river_faces, river_normals)
+            self.river_paths, self.river_flow = self._generate_rivers()
+            self._prepare_tile_geometry() # This replaces _combine_geometry
 
             print(f"Saving world to cache: {cache_filename}")
-            # Don't save transient data like vert_to_tiles
+            # Don't save transient data that can be rebuilt
             transient_data = {"vert_to_tiles": self.vert_to_tiles, "vert_neighbors": self.vert_neighbors}
+            # Temporarily remove non-picklable or transient data
             del self.vert_to_tiles
             del self.vert_neighbors
             with open(cache_filename, 'wb') as f:
@@ -53,27 +61,17 @@ class GameWorld:
             self.vert_to_tiles = transient_data["vert_to_tiles"]
             self.vert_neighbors = transient_data["vert_neighbors"]
 
-    def _combine_geometry(self, river_verts, river_faces, river_normals):
-        print("Combining tile and river geometry...")
-        tile_vertices_np = np.array([v.to_np() for v in self.vertices])
-        river_vertices_np = np.array([v.to_np() for v in river_verts])
-
-        # Combine vertices
-        self.original_vertices = np.vstack([tile_vertices_np, river_vertices_np])
+    def _prepare_tile_geometry(self):
+        print("Preparing tile geometry for rendering...")
+        # self.vertices should already be populated from _create_geometry
+        self.original_vertices = np.array([v.to_np() for v in self.vertices])
         
-        # Combine faces (adjusting indices for rivers)
-        tile_faces = [[self.vertices.index(v) for v in tile.vertices] for tile in self.tiles]
-        river_faces_adjusted = (np.array(river_faces) + len(self.vertices)).tolist()
-        self.face_indices = tile_faces + river_faces_adjusted
+        # Create a map from vertex object to its index for quick lookup
+        vert_to_idx = {v: i for i, v in enumerate(self.vertices)}
 
-        # Combine colors
-        tile_colors = np.array([tile.color for tile in self.tiles])
-        river_colors = np.tile(cfg.RIVER_COLOR, (len(river_faces), 1))
-        self.face_colors = np.vstack([tile_colors, river_colors])
-
-        # Combine normals
-        tile_normals = np.array([tile.normal for tile in self.tiles])
-        self.face_normals = np.vstack([tile_normals, river_normals])
+        self.face_indices = [[vert_to_idx.get(v) for v in tile.vertices] for tile in self.tiles]
+        self.face_colors = np.array([tile.color for tile in self.tiles])
+        self.face_normals = np.array([tile.normal for tile in self.tiles])
 
     def _generate_terrain(self):
         self._build_neighbor_graph()

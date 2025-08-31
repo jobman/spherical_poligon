@@ -28,6 +28,12 @@ class Renderer:
         self.scale_factor = cfg.INITIAL_SCALE_FACTOR
         self.mouse_dragging = False
 
+        # Pre-calculate max flow for river width calculation
+        if self.world.river_flow:
+            self.max_flow = max(self.world.river_flow.values())
+        else:
+            self.max_flow = 1.0
+
     def run(self):
         running = True
         while running:
@@ -92,49 +98,82 @@ class Renderer:
         rot_y = np.array([[cos_y, 0, sin_y], [0, 1, 0], [-sin_y, 0, cos_y]])
         rotation_matrix = rot_y @ rot_x
 
-        # --- Rotate all vertices and normals (tiles and rivers together) ---
+        # --- Rotate tile vertices and normals ---
         rotated_vertices = self.world.original_vertices @ rotation_matrix
         rotated_normals = self.world.face_normals @ rotation_matrix
 
-        # --- Back-face culling ---
+        # --- Back-face culling for tiles ---
         visible_faces_mask = rotated_normals[:, 2] > 0
         visible_indices = np.where(visible_faces_mask)[0]
 
-        if not visible_indices.any():
-            pygame.display.flip()
-            self.clock.tick(self.fps)
-            return
-
-        # --- Process only visible faces ---
-        visible_normals = rotated_normals[visible_indices]
-        visible_colors = self.world.face_colors[visible_indices]
-
-        # --- Lighting ---
-        light_source = cfg.LIGHT_SOURCE_VECTOR / np.linalg.norm(cfg.LIGHT_SOURCE_VECTOR)
-        
-        intensities = np.dot(visible_normals, -light_source)
-        np.clip(intensities, cfg.AMBIENT_LIGHT, 1.0, out=intensities)
-        final_colors = (visible_colors * intensities[:, np.newaxis]).astype(int)
-        np.clip(final_colors, 0, 255, out=final_colors)
-
-        # --- Projection and Depth Sorting ---
-        polygons_to_draw = []
+        # Pre-calculate all projected points once
         projected_points = rotated_vertices[:, :2] * (self.scale_factor * self.zoom) + np.array([self.width / 2, self.height / 2])
 
-        for i, face_idx in enumerate(visible_indices):
-            indices = self.world.face_indices[face_idx]
-            if all(idx < len(projected_points) for idx in indices):
-                depth = np.mean(rotated_vertices[indices, 2])
-                projected = projected_points[indices]
-                polygons_to_draw.append((depth, projected, final_colors[i]))
+        if visible_indices.any():
+            # --- Process only visible faces ---
+            visible_normals = rotated_normals[visible_indices]
+            visible_colors = self.world.face_colors[visible_indices]
 
-        polygons_to_draw.sort(key=lambda x: x[0], reverse=True)
+            # --- Lighting ---
+            light_source = cfg.LIGHT_SOURCE_VECTOR / np.linalg.norm(cfg.LIGHT_SOURCE_VECTOR)
+            
+            intensities = np.dot(visible_normals, -light_source)
+            np.clip(intensities, cfg.AMBIENT_LIGHT, 1.0, out=intensities)
+            final_colors = (visible_colors * intensities[:, np.newaxis]).astype(int)
+            np.clip(final_colors, 0, 255, out=final_colors)
 
-        # --- Drawing ---
-        for _, projected, color in polygons_to_draw:
-            pygame.draw.polygon(self.screen, color, projected)
-            if len(projected) > 4: # Draw edges for tiles but not for rivers
-                 pygame.draw.polygon(self.screen, self.edge_color, projected, 1)
+            # --- Depth Sorting for Tiles ---
+            polygons_to_draw = []
+            for i, face_idx in enumerate(visible_indices):
+                indices = self.world.face_indices[face_idx]
+                if all(idx is not None and idx < len(projected_points) for idx in indices):
+                    depth = np.mean(rotated_vertices[indices, 2])
+                    projected = projected_points[indices]
+                    polygons_to_draw.append((depth, projected, final_colors[i]))
+
+            polygons_to_draw.sort(key=lambda x: x[0], reverse=True)
+
+            # --- Drawing Tiles ---
+            for _, projected, color in polygons_to_draw:
+                pygame.draw.polygon(self.screen, color, projected)
+                pygame.draw.polygon(self.screen, self.edge_color, projected, 1)
+
+        # --- Drawing Rivers ---
+        if self.world.river_paths:
+            vert_to_idx = {v: i for i, v in enumerate(self.world.vertices)}
+            
+            for path in self.world.river_paths:
+                path_indices = [vert_to_idx.get(v) for v in path]
+                path_indices = [i for i in path_indices if i is not None]
+
+                if len(path_indices) < 2:
+                    continue
+                
+                for i in range(len(path_indices) - 1):
+                    idx1 = path_indices[i]
+                    idx2 = path_indices[i+1]
+
+                    # Culling check for the segment
+                    z1 = rotated_vertices[idx1][2]
+                    z2 = rotated_vertices[idx2][2]
+                    if z1 < 0 and z2 < 0:
+                        continue
+
+                    # Get projected points for the segment from the pre-calculated array
+                    p1 = projected_points[idx1]
+                    p2 = projected_points[idx2]
+
+                    # Calculate width based on flow
+                    flow = self.world.river_flow.get(path[i], 1.0)
+                    
+                    if self.max_flow > 0:
+                        normalized_flow = flow / self.max_flow
+                    else:
+                        normalized_flow = 0
+                    
+                    width = 1 + int(4 * normalized_flow)
+                    
+                    pygame.draw.line(self.screen, cfg.RIVER_COLOR, p1, p2, width)
 
         if self.debug_mode:
             self.draw_debug_info()
