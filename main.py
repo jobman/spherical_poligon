@@ -1,4 +1,5 @@
 import pygame
+from pygame.locals import *
 from game_world import GameWorld
 from renderer import Renderer
 import config as cfg

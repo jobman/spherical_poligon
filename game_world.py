@@ -51,15 +51,15 @@ class GameWorld:
 
             print(f"Saving world to cache: {cache_filename}")
             # Don't save transient data that can be rebuilt
-            transient_data = {"vert_to_tiles": self.vert_to_tiles, "vert_neighbors": self.vert_neighbors}
+            transient_data = {"vert_to_tiles": self.vert_to_tiles}
             # Temporarily remove non-picklable or transient data
             del self.vert_to_tiles
-            del self.vert_neighbors
             with open(cache_filename, 'wb') as f:
                 pickle.dump(self.__dict__, f)
             # Restore transient data
             self.vert_to_tiles = transient_data["vert_to_tiles"]
-            self.vert_neighbors = transient_data["vert_neighbors"]
+
+        print(f"World created with {len(self.tiles)} tiles.")
 
     def _prepare_tile_geometry(self):
         print("Preparing tile geometry for rendering...")

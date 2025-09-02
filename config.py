@@ -42,7 +42,7 @@ MAX_ZOOM = 5.0
 INITIAL_SCALE_FACTOR = 250
 
 # --- World Generation ---
-SUBDIVISION_LEVEL = 3
+SUBDIVISION_LEVEL = 5
 RIVER_COUNT = 150
 RIVER_ELEVATION = 0.98
 RIVER_BASE_WIDTH = 0.002
@@ -50,5 +50,6 @@ RIVER_WIDTH_FACTOR = 0.01
 RIVER_DELTA_LENGTH_FACTOR = 1.5 # Controls the length of the river delta, proportional to its width
 
 # --- Lighting ---
-LIGHT_SOURCE_VECTOR = np.array([0.3, 0.5, -0.8])
+LIGHT_SOURCE_VECTOR = np.array([0.8, 0.5, -0.8])
 AMBIENT_LIGHT = 0.3
+LIGHT_ROTATION_SPEED = 0.0001 # Radians per frame

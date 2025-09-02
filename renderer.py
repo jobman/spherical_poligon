@@ -1,21 +1,31 @@
+
 import pygame
+from pygame.locals import *
 import math
 import numpy as np
 import config as cfg
+from OpenGL.GL import *
+from OpenGL.GLU import *
 
 class Renderer:
     def __init__(self, world):
         self.world = world
         self.width, self.height = cfg.SCREEN_WIDTH, cfg.SCREEN_HEIGHT
         self.fps = cfg.FPS
-        self.screen = pygame.display.set_mode((self.width, self.height))
+
+        # --- Anti-aliasing (MSAA) ---
+        pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLEBUFFERS, 1)
+        pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLESAMPLES, 4) # 4x MSAA
+        
+        # Set up Pygame display with OpenGL
+        pygame.display.set_mode((self.width, self.height), DOUBLEBUF | OPENGL)
         pygame.display.set_caption(cfg.CAPTION)
+        
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont("monospace", 16)
         self.debug_mode = False
 
-        self.edge_color = cfg.EDGE_COLOR
-
+        # --- Camera & Input ---
         self.angle_x, self.angle_y = 0, 0
         self.angle_x_vel, self.angle_y_vel = 0, 0
         self.damping = cfg.DAMPING
@@ -25,20 +35,126 @@ class Renderer:
         self.zoom_smoothing_factor = cfg.ZOOM_SMOOTHING_FACTOR
         self.rotation_sensitivity = cfg.ROTATION_SENSITIVITY
         self.keyboard_rotation_speed = cfg.KEYBOARD_ROTATION_SPEED
-        self.scale_factor = cfg.INITIAL_SCALE_FACTOR
         self.mouse_dragging = False
 
-        # Pre-calculate max flow for river width calculation
-        if self.world.river_flow:
-            self.max_flow = max(self.world.river_flow.values())
-        else:
-            self.max_flow = 1.0
+        # --- Lighting ---
+        self.light_angle = 0
+
+        # --- OpenGL Setup ---
+        self.init_gl()
+
+        # --- VBOs ---
+        self.tile_vbo_verts = None
+        self.tile_vbo_colors = None
+        self.tile_vbo_normals = None
+        self.tile_vbo_edges = None
+        self.river_vbo_verts = None
+        self.river_vbo_colors = None
+        
+        self.tile_vert_count = 0
+        self.tile_edge_count = 0
+        self.river_vert_count = 0
+
+        self.prepare_vbos()
+
+    def init_gl(self):
+        glViewport(0, 0, self.width, self.height)
+        glMatrixMode(GL_PROJECTION)
+        glLoadIdentity()
+        gluPerspective(45, (self.width / self.height), 0.1, 50.0)
+        glMatrixMode(GL_MODELVIEW)
+        glEnable(GL_DEPTH_TEST)
+        glEnable(GL_MULTISAMPLE)
+        glEnable(GL_LIGHTING)
+        glEnable(GL_LIGHT0)
+        glEnable(GL_COLOR_MATERIAL)
+        glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE)
+        glEnable(GL_NORMALIZE) # Important for scaling
+        glShadeModel(GL_SMOOTH)
+
+    def prepare_vbos(self):
+        # 1. Prepare Tile Data
+        tile_vertices = []
+        tile_colors = []
+        tile_normals = []
+        edge_vertices = []
+
+        for i, tile in enumerate(self.world.tiles):
+            if len(tile.vertices) < 3: continue
+
+            # We create a fan of triangles from the polygon for rendering
+            v0 = tile.vertices[0].to_np()
+            normal = tile.normal
+            color = tile.color / 255.0 # Normalize color for OpenGL
+
+            for j in range(1, len(tile.vertices) - 1):
+                v1 = tile.vertices[j].to_np()
+                v2 = tile.vertices[j + 1].to_np()
+                
+                tile_vertices.extend([v0, v1, v2])
+                tile_normals.extend([normal, normal, normal])
+                tile_colors.extend([color, color, color])
+
+            # Prepare edge data
+            for j in range(len(tile.vertices)):
+                v_start = tile.vertices[j].to_np()
+                v_end = tile.vertices[(j + 1) % len(tile.vertices)].to_np()
+                edge_vertices.extend([v_start, v_end])
+
+        self.tile_vert_count = len(tile_vertices)
+        self.tile_edge_count = len(edge_vertices)
+
+        # Create VBOs for tiles
+        if self.tile_vert_count > 0:
+            self.tile_vbo_verts = glGenBuffers(1)
+            glBindBuffer(GL_ARRAY_BUFFER, self.tile_vbo_verts)
+            glBufferData(GL_ARRAY_BUFFER, np.array(tile_vertices, dtype=np.float32), GL_STATIC_DRAW)
+
+            self.tile_vbo_colors = glGenBuffers(1)
+            glBindBuffer(GL_ARRAY_BUFFER, self.tile_vbo_colors)
+            glBufferData(GL_ARRAY_BUFFER, np.array(tile_colors, dtype=np.float32), GL_STATIC_DRAW)
+
+            self.tile_vbo_normals = glGenBuffers(1)
+            glBindBuffer(GL_ARRAY_BUFFER, self.tile_vbo_normals)
+            glBufferData(GL_ARRAY_BUFFER, np.array(tile_normals, dtype=np.float32), GL_STATIC_DRAW)
+
+            self.tile_vbo_edges = glGenBuffers(1)
+            glBindBuffer(GL_ARRAY_BUFFER, self.tile_vbo_edges)
+            glBufferData(GL_ARRAY_BUFFER, np.array(edge_vertices, dtype=np.float32), GL_STATIC_DRAW)
+
+        # 2. Prepare River Data
+        river_vertices = []
+        river_colors = []
+        if self.world.river_paths:
+            max_flow = max(self.world.river_flow.values()) if self.world.river_flow else 1.0
+            base_color = cfg.RIVER_COLOR / 255.0
+            
+            for path in self.world.river_paths:
+                if len(path) < 2: continue
+                for i in range(len(path) - 1):
+                    v1 = path[i]
+                    v2 = path[i+1]
+                    river_vertices.extend([v1.to_np(), v2.to_np()])
+                    river_colors.extend([base_color, base_color]) # Simple uniform color for now
+
+        self.river_vert_count = len(river_vertices)
+        if self.river_vert_count > 0:
+            self.river_vbo_verts = glGenBuffers(1)
+            glBindBuffer(GL_ARRAY_BUFFER, self.river_vbo_verts)
+            glBufferData(GL_ARRAY_BUFFER, np.array(river_vertices, dtype=np.float32), GL_STATIC_DRAW)
+
+            self.river_vbo_colors = glGenBuffers(1)
+            glBindBuffer(GL_ARRAY_BUFFER, self.river_vbo_colors)
+            glBufferData(GL_ARRAY_BUFFER, np.array(river_colors, dtype=np.float32), GL_STATIC_DRAW)
+
 
     def run(self):
         running = True
         while running:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
+                    running = False
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                     running = False
                 self.handle_input(event)
 
@@ -54,126 +170,103 @@ class Renderer:
         elif event.type == pygame.MOUSEBUTTONDOWN:
             if event.button == 1:
                 self.mouse_dragging = True
-            elif event.button == 4:
-                self.target_zoom = min(cfg.MAX_ZOOM, self.target_zoom + self.zoom_speed)
-            elif event.button == 5:
-                self.target_zoom = max(cfg.MIN_ZOOM, self.target_zoom - self.zoom_speed)
+            elif event.button == 4: # Zoom in
+                self.target_zoom = max(0.5, self.target_zoom - self.zoom_speed)
+            elif event.button == 5: # Zoom out
+                self.target_zoom = min(5.0, self.target_zoom + self.zoom_speed)
         elif event.type == pygame.MOUSEBUTTONUP:
             if event.button == 1:
                 self.mouse_dragging = False
         elif event.type == pygame.MOUSEMOTION:
             if self.mouse_dragging:
-                sensitivity = 1 / (self.scale_factor * self.zoom)
                 rel_x, rel_y = event.rel
-                inversion_factor = 1 if math.cos(self.angle_x) >= 0 else -1
-                self.angle_y_vel -= rel_x * sensitivity * self.rotation_sensitivity * inversion_factor
-                self.angle_x_vel += rel_y * sensitivity * self.rotation_sensitivity
+                self.angle_y_vel += rel_x * self.rotation_sensitivity * 0.01
+                self.angle_x_vel += rel_y * self.rotation_sensitivity * 0.01
 
     def update(self):
         keys = pygame.key.get_pressed()
-        inversion_factor = -1 if math.cos(self.angle_x) >= 0 else 1
-
         if keys[pygame.K_w]: self.angle_x_vel += self.keyboard_rotation_speed
         if keys[pygame.K_s]: self.angle_x_vel -= self.keyboard_rotation_speed
-        if keys[pygame.K_a]: self.angle_y_vel += self.keyboard_rotation_speed * inversion_factor
-        if keys[pygame.K_d]: self.angle_y_vel -= self.keyboard_rotation_speed * inversion_factor
+        if keys[pygame.K_a]: self.angle_y_vel += self.keyboard_rotation_speed
+        if keys[pygame.K_d]: self.angle_y_vel -= self.keyboard_rotation_speed
 
+        # Update camera angles and apply damping
         self.angle_x += self.angle_x_vel
         self.angle_y += self.angle_y_vel
-
-        self.angle_x %= (2 * math.pi)
-        self.angle_y %= (2 * math.pi)
-
         self.angle_x_vel *= self.damping
         self.angle_y_vel *= self.damping
+
+        # Update zoom
         self.zoom += (self.target_zoom - self.zoom) * self.zoom_smoothing_factor
 
+        # Update light rotation
+        self.light_angle = (self.light_angle + cfg.LIGHT_ROTATION_SPEED) % (2 * math.pi)
+
+
     def draw(self):
-        self.screen.fill(cfg.BACKGROUND_COLOR)
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        glLoadIdentity()
 
-        # --- Create rotation matrix ---
-        cos_x, sin_x = math.cos(self.angle_x), math.sin(self.angle_x)
-        cos_y, sin_y = math.cos(self.angle_y), math.sin(self.angle_y)
-        rot_x = np.array([[1, 0, 0], [0, cos_x, -sin_x], [0, sin_x, cos_x]])
-        rot_y = np.array([[cos_y, 0, sin_y], [0, 1, 0], [-sin_y, 0, cos_y]])
-        rotation_matrix = rot_y @ rot_x
+        # --- Camera Transformations ---
+        glTranslatef(0.0, 0.0, -3 * self.zoom) # Zoom
+        glRotatef(math.degrees(self.angle_x), 1, 0, 0)
+        glRotatef(math.degrees(self.angle_y), 0, 1, 0)
 
-        # --- Rotate tile vertices and normals ---
-        rotated_vertices = self.world.original_vertices @ rotation_matrix
-        rotated_normals = self.world.face_normals @ rotation_matrix
+        # --- Lighting ---
+        # Smoothly rotate the light source around the Y-axis
+        lx, ly, lz = cfg.LIGHT_SOURCE_VECTOR
+        rotated_lx = lx * math.cos(self.light_angle) + lz * math.sin(self.light_angle)
+        rotated_lz = -lx * math.sin(self.light_angle) + lz * math.cos(self.light_angle)
+        light_pos = [rotated_lx, ly, rotated_lz, 0.0]
+        glLightfv(GL_LIGHT0, GL_POSITION, light_pos)
+        
+        ambient = cfg.AMBIENT_LIGHT
+        glLightModelfv(GL_LIGHT_MODEL_AMBIENT, [ambient, ambient, ambient, 1.0])
 
-        # --- Back-face culling for tiles ---
-        visible_faces_mask = rotated_normals[:, 2] > 0
-        visible_indices = np.where(visible_faces_mask)[0]
+        # --- Draw Tiles ---
+        if self.tile_vert_count > 0:
+            glEnableClientState(GL_VERTEX_ARRAY)
+            glEnableClientState(GL_COLOR_ARRAY)
+            glEnableClientState(GL_NORMAL_ARRAY)
 
-        # Pre-calculate all projected points once
-        projected_points = rotated_vertices[:, :2] * (self.scale_factor * self.zoom) + np.array([self.width / 2, self.height / 2])
+            # Draw filled polygons
+            glBindBuffer(GL_ARRAY_BUFFER, self.tile_vbo_verts)
+            glVertexPointer(3, GL_FLOAT, 0, None)
+            glBindBuffer(GL_ARRAY_BUFFER, self.tile_vbo_colors)
+            glColorPointer(3, GL_FLOAT, 0, None)
+            glBindBuffer(GL_ARRAY_BUFFER, self.tile_vbo_normals)
+            glNormalPointer(GL_FLOAT, 0, None)
+            glDrawArrays(GL_TRIANGLES, 0, self.tile_vert_count)
 
-        if visible_indices.any():
-            # --- Process only visible faces ---
-            visible_normals = rotated_normals[visible_indices]
-            visible_colors = self.world.face_colors[visible_indices]
+            # Draw edges
+            glDisable(GL_LIGHTING)
+            glColor3f(0.2, 0.2, 0.2) # Dark edges
+            glLineWidth(1.0)
+            glBindBuffer(GL_ARRAY_BUFFER, self.tile_vbo_edges)
+            glVertexPointer(3, GL_FLOAT, 0, None)
+            glDrawArrays(GL_LINES, 0, self.tile_edge_count)
+            glEnable(GL_LIGHTING)
 
-            # --- Lighting ---
-            light_source = cfg.LIGHT_SOURCE_VECTOR / np.linalg.norm(cfg.LIGHT_SOURCE_VECTOR)
-            
-            intensities = np.dot(visible_normals, -light_source)
-            np.clip(intensities, cfg.AMBIENT_LIGHT, 1.0, out=intensities)
-            final_colors = (visible_colors * intensities[:, np.newaxis]).astype(int)
-            np.clip(final_colors, 0, 255, out=final_colors)
+            glDisableClientState(GL_VERTEX_ARRAY)
+            glDisableClientState(GL_COLOR_ARRAY)
+            glDisableClientState(GL_NORMAL_ARRAY)
 
-            # --- Depth Sorting for Tiles ---
-            polygons_to_draw = []
-            for i, face_idx in enumerate(visible_indices):
-                indices = self.world.face_indices[face_idx]
-                if all(idx is not None and idx < len(projected_points) for idx in indices):
-                    depth = np.mean(rotated_vertices[indices, 2])
-                    projected = projected_points[indices]
-                    polygons_to_draw.append((depth, projected, final_colors[i]))
+        # --- Draw Rivers ---
+        if self.river_vert_count > 0:
+            glDisable(GL_LIGHTING)
+            glLineWidth(2.0) # Make rivers a bit thicker
+            glEnableClientState(GL_VERTEX_ARRAY)
+            glEnableClientState(GL_COLOR_ARRAY)
 
-            polygons_to_draw.sort(key=lambda x: x[0], reverse=True)
+            glBindBuffer(GL_ARRAY_BUFFER, self.river_vbo_verts)
+            glVertexPointer(3, GL_FLOAT, 0, None)
+            glBindBuffer(GL_ARRAY_BUFFER, self.river_vbo_colors)
+            glColorPointer(3, GL_FLOAT, 0, None)
+            glDrawArrays(GL_LINES, 0, self.river_vert_count)
 
-            # --- Drawing Tiles ---
-            for _, projected, color in polygons_to_draw:
-                pygame.draw.polygon(self.screen, color, projected)
-                pygame.draw.polygon(self.screen, self.edge_color, projected, 1)
-
-        # --- Drawing Rivers ---
-        if self.world.river_paths:
-            vert_to_idx = {v: i for i, v in enumerate(self.world.vertices)}
-            
-            for path in self.world.river_paths:
-                path_indices = [vert_to_idx.get(v) for v in path]
-                path_indices = [i for i in path_indices if i is not None]
-
-                if len(path_indices) < 2:
-                    continue
-                
-                for i in range(len(path_indices) - 1):
-                    idx1 = path_indices[i]
-                    idx2 = path_indices[i+1]
-
-                    # Culling check for the segment
-                    z1 = rotated_vertices[idx1][2]
-                    z2 = rotated_vertices[idx2][2]
-                    if z1 < 0 and z2 < 0:
-                        continue
-
-                    # Get projected points for the segment from the pre-calculated array
-                    p1 = projected_points[idx1]
-                    p2 = projected_points[idx2]
-
-                    # Calculate width based on flow
-                    flow = self.world.river_flow.get(path[i], 1.0)
-                    
-                    if self.max_flow > 0:
-                        normalized_flow = flow / self.max_flow
-                    else:
-                        normalized_flow = 0
-                    
-                    width = 1 + int(4 * normalized_flow)
-                    
-                    pygame.draw.line(self.screen, cfg.RIVER_COLOR, p1, p2, width)
+            glDisableClientState(GL_VERTEX_ARRAY)
+            glDisableClientState(GL_COLOR_ARRAY)
+            glEnable(GL_LIGHTING)
 
         if self.debug_mode:
             self.draw_debug_info()
@@ -182,18 +275,55 @@ class Renderer:
         self.clock.tick(self.fps)
 
     def draw_debug_info(self):
-        fps_text = f"FPS: {self.clock.get_fps():.2f}"
-        angle_text_x = f"Angle X: {math.degrees(self.angle_x):.2f}"
-        angle_text_y = f"Angle Y: {math.degrees(self.angle_y):.2f}"
-        vert_count_text = f"Vertices: {len(self.world.original_vertices)}"
-        face_count_text = f"Faces: {len(self.world.face_indices)}"
+        # Switch to 2D orthographic mode
+        glMatrixMode(GL_PROJECTION)
+        glPushMatrix()
+        glLoadIdentity()
+        gluOrtho2D(0, self.width, 0, self.height)
+        glMatrixMode(GL_MODELVIEW)
+        glPushMatrix()
+        glLoadIdentity()
         
-        def render(text, y):
-            surface = self.font.render(text, True, (255, 255, 255))
-            self.screen.blit(surface, (10, y))
+        # Disable 3D features we don't need for 2D UI
+        glDisable(GL_LIGHTING)
+        glDisable(GL_DEPTH_TEST)
+        glEnable(GL_BLEND) # Enable blending for transparency
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
-        render(fps_text, 10)
-        render(angle_text_x, 30)
-        render(angle_text_y, 50)
-        render(vert_count_text, 70)
-        render(face_count_text, 90)
+        y_offset = 10
+
+        def render(text, x, y):
+            # 1. Render the text with a white color
+            text_surface = self.font.render(text, True, (255, 255, 255, 255))
+            
+            # 2. Create a semi-transparent background surface
+            bg_height = text_surface.get_height() + 4
+            bg_surface = pygame.Surface((self.width, bg_height), pygame.SRCALPHA)
+            bg_surface.fill((20, 20, 20, 180)) # Dark, semi-transparent background
+
+            # 3. Blit the text onto our background
+            bg_surface.blit(text_surface, (5, 2)) # Add some padding
+
+            # 4. Convert to OpenGL texture format and draw
+            data = pygame.image.tostring(bg_surface, "RGBA", True)
+            glWindowPos2d(x, self.height - y - bg_surface.get_height())
+            glDrawPixels(bg_surface.get_width(), bg_surface.get_height(), GL_RGBA, GL_UNSIGNED_BYTE, data)
+            
+            return bg_height
+
+        # Render each line of debug info and update the y_offset
+        y_offset += render(f"FPS: {self.clock.get_fps():.2f}", 0, y_offset)
+        y_offset += render(f"Angle X: {math.degrees(self.angle_x):.2f}", 0, y_offset)
+        y_offset += render(f"Angle Y: {math.degrees(self.angle_y):.2f}", 0, y_offset)
+        y_offset += render(f"Zoom: {self.zoom:.2f}", 0, y_offset)
+        y_offset += render(f"Vertices: {self.tile_vert_count}", 0, y_offset)
+        y_offset += render(f"Light Angle: {math.degrees(self.light_angle):.2f}", 0, y_offset)
+        
+        # Restore previous OpenGL state
+        glDisable(GL_BLEND)
+        glEnable(GL_DEPTH_TEST)
+        glEnable(GL_LIGHTING)
+        glMatrixMode(GL_PROJECTION)
+        glPopMatrix()
+        glMatrixMode(GL_MODELVIEW)
+        glPopMatrix()
