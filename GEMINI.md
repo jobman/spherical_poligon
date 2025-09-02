@@ -7,7 +7,8 @@ This document provides context for the Gemini CLI to understand and assist with 
 This is a Python-based strategy game prototype that renders a spherical world. The core technologies used are:
 
 *   **Python:** The primary programming language.
-*   **Pygame:** Used for rendering the 2D projection of the 3D world and handling user input.
+*   **Pygame:** Used for creating the window and handling user input.
+*   **PyOpenGL:** Handles all 3D rendering tasks.
 *   **NumPy:** Extensively used for 3D graphics calculations, vector operations, and matrix transformations.
 
 The project generates a planet-like sphere procedurally. Key features include:
@@ -16,8 +17,11 @@ The project generates a planet-like sphere procedurally. Key features include:
 *   **Procedural Terrain:** Terrain features like land, oceans, mountains, and different biomes are generated using Perlin noise.
 *   **River Generation:** A system for generating river networks that flow from high elevations towards the sea.
 *   **World Caching:** To speed up load times, the complex generated world geometry is cached to a `.pkl` file (`world_cache_level_*.pkl`). The cache is invalidated if the subdivision level in `config.py` is changed.
-*   **3D Rendering:** A custom 3D renderer is implemented to project the spherical world onto the 2D screen, including back-face culling and basic lighting.
-*   **User Interaction:** The camera can be rotated using the mouse or WASD keys, and zoomed with the mouse wheel. A debug overlay can be toggled with the F3 key.
+*   **3D Rendering:** A custom 3D renderer is implemented using PyOpenGL. Key rendering features include:
+    *   A smoothly rotating directional light source to create dynamic shadows.
+    *   MSAA (4x) anti-aliasing to smooth the edges of polygons and lines.
+    *   Efficient rendering using Vertex Buffer Objects (VBOs).
+*   **User Interaction:** The camera can be rotated using the mouse (with adjusted sensitivity and inverted controls) or WASD keys, and zoomed with the mouse wheel. A debug overlay can be toggled with the F3 key.
 
 ## Building and Running
 
@@ -26,7 +30,7 @@ The project is intended to be run within a Python virtual environment.
 1.  **Setup (if not already done):**
     *   Create a virtual environment: `python -m venv .venv`
     *   Activate it: `call .venv\Scripts\activate.bat`
-    *   Install dependencies: `pip install pygame numpy perlin-noise` (based on imports)
+    *   Install dependencies: `pip install pygame numpy perlin-noise PyOpenGL`
 
 2.  **Running the Application:**
     *   The simplest way to run the application is to execute the `run.bat` script.
@@ -34,11 +38,11 @@ The project is intended to be run within a Python virtual environment.
 
 ## Development Conventions
 
-*   **Configuration:** Project settings such as screen resolution, world generation parameters, and colors are centralized in `config.py`.
+*   **Configuration:** Project settings such as screen resolution, world generation parameters, lighting, and controls are centralized in `config.py`.
 *   **Modularity:** The code is organized into distinct modules:
     *   `main.py`: The main application entry point.
     *   `game_world.py`: Handles the logic for generating and managing the world state.
-    *   `renderer.py`: Contains the Pygame-based rendering engine.
+    *   `renderer.py`: Contains the Pygame/PyOpenGL-based rendering engine.
     *   `geometry.py`: Defines the `Vertex` class and related geometric utilities.
     *   `polyhedron_generator.py`: Logic for creating the base icosahedron and subdividing it.
     *   `tile.py`: Defines the `Tile` class, representing a single polygon on the sphere.
