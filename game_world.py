@@ -7,11 +7,10 @@ from config import TerrainType
 import pickle
 import os
 from perlin_noise import PerlinNoise
-import random
 from river_generator import RiverGenerator
 import config as cfg
-
 from polyhedron_generator import PolyhedronGenerator
+from render_data import RenderData
 
 class GameWorld:
     def __init__(self, subdivision_level=cfg.SUBDIVISION_LEVEL):
@@ -20,14 +19,6 @@ class GameWorld:
         self.vertices = [] # Tile vertices, also used for river graph
         self.vert_to_tiles = defaultdict(list)
         self.vert_neighbors = defaultdict(list)
-
-        # Unified geometry for rendering tiles
-        self.original_vertices = np.array([])
-        self.face_indices = []
-        self.face_colors = np.array([])
-        self.face_normals = np.array([])
-
-        # River data
         self.river_paths = []
         self.river_flow = {}
 
@@ -38,7 +29,6 @@ class GameWorld:
             with open(cache_filename, 'rb') as f:
                 data = pickle.load(f)
                 self.__dict__.update(data)
-            # Rebuild transient data that is not saved in cache
             self._build_neighbor_graph()
             self._build_vertex_neighbors()
         else:
@@ -47,31 +37,57 @@ class GameWorld:
             self._generate_terrain()
             self._build_vertex_neighbors()
             self.river_paths, self.river_flow = self._generate_rivers()
-            self._prepare_tile_geometry() # This replaces _combine_geometry
 
             print(f"Saving world to cache: {cache_filename}")
-            # Don't save transient data that can be rebuilt
             transient_data = {"vert_to_tiles": self.vert_to_tiles}
-            # Temporarily remove non-picklable or transient data
             del self.vert_to_tiles
             with open(cache_filename, 'wb') as f:
                 pickle.dump(self.__dict__, f)
-            # Restore transient data
             self.vert_to_tiles = transient_data["vert_to_tiles"]
 
         print(f"World created with {len(self.tiles)} tiles.")
 
-    def _prepare_tile_geometry(self):
-        print("Preparing tile geometry for rendering...")
-        # self.vertices should already be populated from _create_geometry
-        self.original_vertices = np.array([v.to_np() for v in self.vertices])
-        
-        # Create a map from vertex object to its index for quick lookup
-        vert_to_idx = {v: i for i, v in enumerate(self.vertices)}
+    def get_render_data(self):
+        print("Preparing render data...")
+        tile_vertices, tile_colors, tile_normals, edge_vertices = [], [], [], []
 
-        self.face_indices = [[vert_to_idx.get(v) for v in tile.vertices] for tile in self.tiles]
-        self.face_colors = np.array([tile.color for tile in self.tiles])
-        self.face_normals = np.array([tile.normal for tile in self.tiles])
+        for tile in self.tiles:
+            if len(tile.vertices) < 3: continue
+            v0 = tile.vertices[0].to_np()
+            normal = tile.normal
+            color = tile.color / 255.0
+
+            for j in range(1, len(tile.vertices) - 1):
+                v1 = tile.vertices[j].to_np()
+                v2 = tile.vertices[j + 1].to_np()
+                tile_vertices.extend([v0, v1, v2])
+                tile_normals.extend([normal, normal, normal])
+                tile_colors.extend([color, color, color])
+
+            for j in range(len(tile.vertices)):
+                v_start = tile.vertices[j].to_np()
+                v_end = tile.vertices[(j + 1) % len(tile.vertices)].to_np()
+                edge_vertices.extend([v_start, v_end])
+
+        river_vertices, river_colors = [], []
+        if self.river_paths:
+            base_color = cfg.RIVER_COLOR / 255.0
+            for path in self.river_paths:
+                if len(path) < 2: continue
+                for i in range(len(path) - 1):
+                    v1 = path[i]
+                    v2 = path[i+1]
+                    river_vertices.extend([v1.to_np(), v2.to_np()])
+                    river_colors.extend([base_color, base_color])
+
+        return RenderData(
+            tile_vertices=np.array(tile_vertices, dtype=np.float32),
+            tile_colors=np.array(tile_colors, dtype=np.float32),
+            tile_normals=np.array(tile_normals, dtype=np.float32),
+            edge_vertices=np.array(edge_vertices, dtype=np.float32),
+            river_vertices=np.array(river_vertices, dtype=np.float32),
+            river_colors=np.array(river_colors, dtype=np.float32)
+        )
 
     def _generate_terrain(self):
         self._build_neighbor_graph()
