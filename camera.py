@@ -1,4 +1,3 @@
-
 import math
 import config as cfg
 from OpenGL.GL import glRotatef, glTranslatef

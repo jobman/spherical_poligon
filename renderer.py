@@ -17,7 +17,7 @@ class Renderer:
         self.fps = cfg.FPS
 
         pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLEBUFFERS, 1)
-        pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLESAMPLES, 4)
+        pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLESAMPLES, 8)
         pygame.display.set_mode((self.width, self.height), DOUBLEBUF | OPENGL)
         pygame.display.set_caption(cfg.CAPTION)
         
@@ -145,7 +145,7 @@ class Renderer:
 
         if self.river_vert_count > 0:
             glDisable(GL_LIGHTING)
-            glLineWidth(2.0)
+            glLineWidth(4.0)
             glEnableClientState(GL_VERTEX_ARRAY)
             glEnableClientState(GL_COLOR_ARRAY)
 
