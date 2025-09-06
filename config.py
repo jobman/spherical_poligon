@@ -23,6 +23,7 @@ class TerrainType(Enum):
 # --- Renderer Settings ---
 SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 600
+FULLSCREEN = True
 FPS = 60
 CAPTION = "Spherical World"
 

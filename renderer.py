@@ -14,12 +14,19 @@ class Renderer:
     def __init__(self, render_data, game_world):
         self.render_data = render_data
         self.game_world = game_world
-        self.width, self.height = cfg.SCREEN_WIDTH, cfg.SCREEN_HEIGHT
         self.fps = cfg.FPS
+
+        display_flags = DOUBLEBUF | OPENGL
+        if cfg.FULLSCREEN:
+            display_flags |= FULLSCREEN
+            info = pygame.display.Info()
+            self.width, self.height = info.current_w, info.current_h
+        else:
+            self.width, self.height = cfg.SCREEN_WIDTH, cfg.SCREEN_HEIGHT
 
         pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLEBUFFERS, 1)
         pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLESAMPLES, 8)
-        pygame.display.set_mode((self.width, self.height), DOUBLEBUF | OPENGL)
+        pygame.display.set_mode((self.width, self.height), display_flags)
         pygame.display.set_caption(cfg.CAPTION)
         
         self.clock = pygame.time.Clock()
