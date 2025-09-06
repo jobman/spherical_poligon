@@ -13,7 +13,7 @@ if __name__ == "__main__":
     render_data = game_world.get_render_data()
 
     # 3. Create the renderer with the data
-    renderer = Renderer(render_data)
+    renderer = Renderer(render_data, game_world)
     
     # 4. Run the main loop
     renderer.run()

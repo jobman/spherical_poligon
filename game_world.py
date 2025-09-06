@@ -11,6 +11,7 @@ from river_generator import RiverGenerator
 import config as cfg
 from polyhedron_generator import PolyhedronGenerator
 from render_data import RenderData
+from spatial_hash_grid import SpatialHashGrid
 
 class GameWorld:
     def __init__(self, subdivision_level=cfg.SUBDIVISION_LEVEL):
@@ -21,6 +22,7 @@ class GameWorld:
         self.vert_neighbors = defaultdict(list)
         self.river_paths = []
         self.river_flow = {}
+        self.spatial_hash_grid = None
 
         cache_filename = f"world_cache_level_{self.subdivision_level}.pkl"
 
@@ -46,6 +48,10 @@ class GameWorld:
             self.vert_to_tiles = transient_data["vert_to_tiles"]
 
         print(f"World created with {len(self.tiles)} tiles.")
+
+        print("Building spatial hash grid...")
+        self.spatial_hash_grid = SpatialHashGrid(self.tiles)
+        print("Spatial hash grid built.")
 
     def get_render_data(self):
         print("Preparing render data...")

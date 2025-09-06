@@ -1,4 +1,3 @@
-
 import pygame
 from pygame.locals import *
 import math
@@ -9,10 +8,12 @@ from OpenGL.GLU import *
 from render_data import RenderData
 from camera import Camera
 from input_handler import InputHandler
+import picking
 
 class Renderer:
-    def __init__(self, render_data):
+    def __init__(self, render_data, game_world):
         self.render_data = render_data
+        self.game_world = game_world
         self.width, self.height = cfg.SCREEN_WIDTH, cfg.SCREEN_HEIGHT
         self.fps = cfg.FPS
 
@@ -26,7 +27,7 @@ class Renderer:
         self.debug_mode = False
 
         self.camera = Camera()
-        self.input_handler = InputHandler(self.camera, self)
+        self.input_handler = InputHandler(self.camera, self, game_world)
 
         self.light_angle = 0
 
@@ -109,6 +110,19 @@ class Renderer:
 
         self.camera.apply_transformations()
 
+        if self.input_handler.click_to_process:
+            x, y = self.input_handler.click_to_process
+            selected_tile = picking.get_tile_at_pos(x, y, self.width, self.height, self.camera, self.game_world)
+            
+            for tile in self.game_world.tiles:
+                tile.is_selected = False
+            
+            if selected_tile:
+                selected_tile.is_selected = True
+                print(f"Selected tile: {selected_tile.id}")
+            
+            self.input_handler.click_to_process = None
+
         lx, ly, lz = cfg.LIGHT_SOURCE_VECTOR
         rotated_lx = lx * math.cos(self.light_angle) + lz * math.sin(self.light_angle)
         rotated_lz = -lx * math.sin(self.light_angle) + lz * math.cos(self.light_angle)
@@ -159,11 +173,28 @@ class Renderer:
             glDisableClientState(GL_COLOR_ARRAY)
             glEnable(GL_LIGHTING)
 
+        self.draw_selected_tile()
+
         if self.debug_mode:
             self.draw_debug_info()
 
         pygame.display.flip()
         self.clock.tick(self.fps)
+
+    def draw_selected_tile(self):
+        glDisable(GL_LIGHTING)
+        glColor3f(1.0, 0.0, 0.0) # Red
+        glLineWidth(3.0)
+
+        for tile in self.game_world.tiles:
+            if tile.is_selected:
+                glBegin(GL_LINE_LOOP)
+                for vertex in tile.vertices:
+                    v = vertex.to_np() * 1.001
+                    glVertex3fv(v)
+                glEnd()
+        
+        glEnable(GL_LIGHTING)
 
     def draw_debug_info(self):
         glMatrixMode(GL_PROJECTION)

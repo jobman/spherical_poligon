@@ -3,10 +3,13 @@ from pygame.locals import *
 import math
 
 class InputHandler:
-    def __init__(self, camera, renderer):
+    def __init__(self, camera, renderer, game_world):
         self.camera = camera
         self.renderer = renderer
+        self.game_world = game_world
         self.mouse_dragging = False
+        self.click_to_process = None
+        self.mouse_down_pos = None
 
     def handle_events(self, events):
         for event in events:
@@ -34,13 +37,18 @@ class InputHandler:
         elif event.type == pygame.MOUSEBUTTONDOWN:
             if event.button == 1:
                 self.mouse_dragging = True
+                self.mouse_down_pos = event.pos
             elif event.button == 4: # Zoom in
                 self.camera.target_zoom = max(0.5, self.camera.target_zoom - self.camera.zoom_speed)
             elif event.button == 5: # Zoom out
                 self.camera.target_zoom = min(5.0, self.camera.target_zoom + self.camera.zoom_speed)
         elif event.type == pygame.MOUSEBUTTONUP:
-            if event.button == 1:
+            if event.button == 1 and self.mouse_down_pos:
+                dist_sq = (event.pos[0] - self.mouse_down_pos[0])**2 + (event.pos[1] - self.mouse_down_pos[1])**2
+                if dist_sq < 10: # Click threshold
+                    self.click_to_process = event.pos
                 self.mouse_dragging = False
+                self.mouse_down_pos = None
         elif event.type == pygame.MOUSEMOTION:
             if self.mouse_dragging:
                 inversion_factor = -1 if math.cos(self.camera.angle_x) < 0 else 1
