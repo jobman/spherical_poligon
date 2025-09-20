@@ -12,17 +12,26 @@ import config as cfg
 from polyhedron_generator import PolyhedronGenerator
 from render_data import RenderData
 from spatial_hash_grid import SpatialHashGrid
+from unit import Unit
 
 class GameWorld:
     def __init__(self, subdivision_level=cfg.SUBDIVISION_LEVEL):
         self.subdivision_level = subdivision_level
         self.tiles = []
         self.vertices = [] # Tile vertices, also used for river graph
+        self.units = []
         self.vert_to_tiles = defaultdict(list)
         self.vert_neighbors = defaultdict(list)
         self.river_paths = []
         self.river_flow = {}
         self.spatial_hash_grid = None
+
+        # For testing, create one unit
+        # This line needs to be placed after tiles are initialized and the world is loaded/generated.
+        # The original replace string had `self.load_or_generate_world()` which is not in the current file.
+        # The instruction implies adding it in the constructor, so it's placed here as a placeholder.
+        # A separate edit would be needed to add the `add_unit` method and place this call correctly.
+        # self.add_unit(self.tiles[0], owner=None) # For testing
 
         cache_filename = f"world_cache_level_{self.subdivision_level}.pkl"
 
@@ -51,10 +60,14 @@ class GameWorld:
 
         print("Building spatial hash grid...")
         self.spatial_hash_grid = SpatialHashGrid(self.tiles)
-        print("Spatial hash grid built.")
+
+        self.add_unit(self.tiles[0], owner=None)
+
+    def add_unit(self, tile, owner):
+        unit = Unit(tile, owner)
+        self.units.append(unit)
 
     def get_render_data(self):
-        print("Preparing render data...")
         tile_vertices, tile_colors, tile_normals, edge_vertices = [], [], [], []
 
         for tile in self.tiles:

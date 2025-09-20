@@ -35,6 +35,8 @@ class Renderer:
 
         self.camera = Camera()
         self.input_handler = InputHandler(self.camera, self, game_world)
+        self.selected_tile = None
+        self.selected_unit = None
 
         self.light_angle = 0
 
@@ -119,16 +121,23 @@ class Renderer:
 
         if self.input_handler.click_to_process:
             x, y = self.input_handler.click_to_process
-            selected_tile = picking.get_tile_at_pos(x, y, self.width, self.height, self.camera, self.game_world)
-            
-            for tile in self.game_world.tiles:
-                tile.is_selected = False
-            
-            if selected_tile:
-                selected_tile.is_selected = True
-                print(f"Selected tile: {selected_tile.id}")
-            
+            clicked_tile = picking.get_tile_at_pos(x, y, self.width, self.height, self.camera, self.game_world)
             self.input_handler.click_to_process = None
+
+            if clicked_tile:
+                if self.selected_unit:
+                    if self.selected_unit.move_to(clicked_tile):
+                        self.selected_unit = None # Deselect after moving
+                    else:
+                        # If the clicked tile is not a valid move, check if it has a unit to select
+                        if clicked_tile.unit:
+                            self.selected_unit = clicked_tile.unit
+                        else:
+                            self.selected_unit = None # Deselect if clicking on empty tile
+                elif clicked_tile.unit:
+                    self.selected_unit = clicked_tile.unit
+                
+                self.selected_tile = clicked_tile
 
         lx, ly, lz = cfg.LIGHT_SOURCE_VECTOR
         rotated_lx = lx * math.cos(self.light_angle) + lz * math.sin(self.light_angle)
@@ -181,6 +190,9 @@ class Renderer:
             glEnable(GL_LIGHTING)
 
         self.draw_selected_tile()
+        self.draw_units()
+        self.draw_possible_moves()
+        self.draw_ui()
 
         if self.debug_mode:
             self.draw_debug_info()
@@ -189,19 +201,100 @@ class Renderer:
         self.clock.tick(self.fps)
 
     def draw_selected_tile(self):
-        glDisable(GL_LIGHTING)
-        glColor3f(1.0, 0.0, 0.0) # Red
-        glLineWidth(3.0)
+        if self.selected_tile:
+            glDisable(GL_LIGHTING)
+            glColor3f(1.0, 1.0, 0.0) # Yellow
+            glLineWidth(3.0)
 
-        for tile in self.game_world.tiles:
-            if tile.is_selected:
-                glBegin(GL_LINE_LOOP)
-                for vertex in tile.vertices:
-                    v = vertex.to_np() * 1.001
-                    glVertex3fv(v)
-                glEnd()
-        
+            glBegin(GL_LINE_LOOP)
+            for vertex in self.selected_tile.vertices:
+                v = vertex.to_np() * 1.001
+                glVertex3fv(v)
+            glEnd()
+            
+            glEnable(GL_LIGHTING)
+
+    def draw_units(self):
+        glDisable(GL_LIGHTING)
+        for unit in self.game_world.units:
+            if unit == self.selected_unit:
+                glColor3f(1.0, 1.0, 0.0) # Yellow for selected unit
+            else:
+                glColor3f(0.0, 0.0, 1.0) # Blue for other units
+
+            glPushMatrix()
+            center = unit.tile.center * 1.01 # Slightly above the tile
+            glTranslatef(center[0], center[1], center[2])
+            quad = gluNewQuadric()
+            gluSphere(quad, 0.02, 16, 16)
+            gluDeleteQuadric(quad)
+            glPopMatrix()
         glEnable(GL_LIGHTING)
+
+    def draw_possible_moves(self):
+        if self.selected_unit:
+            glDisable(GL_LIGHTING)
+            glEnable(GL_BLEND)
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+            glColor4f(0.0, 1.0, 0.0, 0.5) # Semi-transparent green
+
+            for neighbor in self.selected_unit.tile.neighbors:
+                if not neighbor.unit:
+                    glBegin(GL_TRIANGLE_FAN)
+                    glVertex3fv(neighbor.center * 1.002)
+                    for vertex in neighbor.vertices:
+                        glVertex3fv(vertex.to_np() * 1.002)
+                    glVertex3fv(neighbor.vertices[0].to_np() * 1.002)
+                    glEnd()
+
+            glDisable(GL_BLEND)
+            glEnable(GL_LIGHTING)
+
+    def draw_ui(self):
+        glMatrixMode(GL_PROJECTION)
+        glPushMatrix()
+        glLoadIdentity()
+        gluOrtho2D(0, self.width, 0, self.height)
+        glMatrixMode(GL_MODELVIEW)
+        glPushMatrix()
+        glLoadIdentity()
+        
+        glDisable(GL_LIGHTING)
+        glDisable(GL_DEPTH_TEST)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+
+        panel_height = 100
+        bg_surface = pygame.Surface((self.width, panel_height), pygame.SRCALPHA)
+        bg_surface.fill((20, 20, 20, 180))
+        
+        if self.selected_tile:
+            tile = self.selected_tile
+            
+            def render_text(text, x, y):
+                text_surface = self.font.render(text, True, (255, 255, 255, 255))
+                bg_surface.blit(text_surface, (x, y))
+                return text_surface.get_height()
+
+            y_offset = 10
+            x_offset = 10
+            y_offset += render_text(f"Selected Tile: {tile.id}", x_offset, y_offset)
+            y_offset += render_text(f"Terrain: {tile.terrain_type.name}", x_offset, y_offset)
+            y_offset += render_text(f"Height: {tile.height:.4f}", x_offset, y_offset)
+            y_offset += render_text(f"Normal: ({tile.normal[0]:.2f}, {tile.normal[1]:.2f}, {tile.normal[2]:.2f})", x_offset, y_offset)
+            y_offset += render_text(f"Neighbors: {len(tile.neighbors)}", x_offset, y_offset)
+
+        data = pygame.image.tostring(bg_surface, "RGBA", True)
+        glWindowPos2d(0, 0)
+        glDrawPixels(self.width, panel_height, GL_RGBA, GL_UNSIGNED_BYTE, data)
+
+        glDisable(GL_BLEND)
+        glEnable(GL_DEPTH_TEST)
+        glEnable(GL_LIGHTING)
+        glMatrixMode(GL_PROJECTION)
+        glPopMatrix()
+        glMatrixMode(GL_MODELVIEW)
+        glPopMatrix()
 
     def draw_debug_info(self):
         glMatrixMode(GL_PROJECTION)

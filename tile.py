@@ -11,6 +11,7 @@ class Tile:
         self.height = 0.0
         self.neighbors = []
         self.is_selected = False
+        self.unit = None
 
     def __getstate__(self):
         state = self.__dict__.copy()
@@ -22,6 +23,8 @@ class Tile:
     def __setstate__(self, state):
         self.__dict__.update(state)
         self.neighbors = []
+        self.unit = None
+        self.is_selected = False
 
     def is_water(self):
         return self.terrain_type in [TerrainType.OCEAN, TerrainType.COAST, TerrainType.ICE]
