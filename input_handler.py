@@ -1,6 +1,7 @@
 import pygame
 from pygame.locals import *
 import math
+import config as cfg
 
 class InputHandler:
     def __init__(self, camera, renderer, game_world):
@@ -39,9 +40,9 @@ class InputHandler:
                 self.mouse_dragging = True
                 self.mouse_down_pos = event.pos
             elif event.button == 4: # Zoom in
-                self.camera.target_zoom = max(0.5, self.camera.target_zoom - self.camera.zoom_speed)
+                self.camera.target_zoom = max(cfg.MIN_ZOOM, self.camera.target_zoom - self.camera.zoom_speed)
             elif event.button == 5: # Zoom out
-                self.camera.target_zoom = min(5.0, self.camera.target_zoom + self.camera.zoom_speed)
+                self.camera.target_zoom = min(cfg.MAX_ZOOM, self.camera.target_zoom + self.camera.zoom_speed)
         elif event.type == pygame.MOUSEBUTTONUP:
             if event.button == 1 and self.mouse_down_pos:
                 dist_sq = (event.pos[0] - self.mouse_down_pos[0])**2 + (event.pos[1] - self.mouse_down_pos[1])**2

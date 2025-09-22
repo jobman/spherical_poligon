@@ -16,4 +16,8 @@ if __name__ == "__main__":
     renderer = Renderer(render_data, game_world)
     
     # 4. Run the main loop
-    renderer.run()
+    running = True
+    while running:
+        running = renderer.run_frame()
+    
+    pygame.quit()

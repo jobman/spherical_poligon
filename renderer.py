@@ -9,12 +9,14 @@ from render_data import RenderData
 from camera import Camera
 from input_handler import InputHandler
 import picking
+from model import Model
 
 class Renderer:
     def __init__(self, render_data, game_world):
         self.render_data = render_data
         self.game_world = game_world
         self.fps = cfg.FPS
+        self.models = {}
 
         display_flags = DOUBLEBUF | OPENGL
         if cfg.FULLSCREEN:
@@ -54,6 +56,10 @@ class Renderer:
         self.river_vert_count = 0
 
         self.prepare_vbos(render_data)
+        self.load_model("unit", "assets/textured_primal_warior.glb")
+
+    def load_model(self, name, file_path):
+        self.models[name] = Model(file_path)
 
     def init_gl(self):
         glViewport(0, 0, self.width, self.height)
@@ -63,11 +69,12 @@ class Renderer:
         glMatrixMode(GL_MODELVIEW)
         glEnable(GL_DEPTH_TEST)
         glEnable(GL_MULTISAMPLE)
+        glEnable(GL_CULL_FACE)
         glEnable(GL_LIGHTING)
         glEnable(GL_LIGHT0)
         glEnable(GL_COLOR_MATERIAL)
         glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE)
-        glEnable(GL_NORMALIZE)
+        glEnable(GL_NORMALIZE) # Switched back from RESCALE for robustness
         glShadeModel(GL_SMOOTH)
 
     def prepare_vbos(self, render_data):
@@ -101,13 +108,11 @@ class Renderer:
             glBindBuffer(GL_ARRAY_BUFFER, self.river_vbo_colors)
             glBufferData(GL_ARRAY_BUFFER, render_data.river_colors, GL_STATIC_DRAW)
 
-    def run(self):
-        running = True
-        while running:
-            running = self.input_handler.handle_events(pygame.event.get())
-            self.update()
-            self.draw()
-        pygame.quit()
+    def run_frame(self):
+        running = self.input_handler.handle_events(pygame.event.get())
+        self.update()
+        self.draw()
+        return running
 
     def update(self):
         self.camera.update()
@@ -215,21 +220,30 @@ class Renderer:
             glEnable(GL_LIGHTING)
 
     def draw_units(self):
-        glDisable(GL_LIGHTING)
-        for unit in self.game_world.units:
-            if unit == self.selected_unit:
-                glColor3f(1.0, 1.0, 0.0) # Yellow for selected unit
-            else:
-                glColor3f(0.0, 0.0, 1.0) # Blue for other units
+        unit_model = self.models.get("unit")
+        if not unit_model:
+            return
 
+        glDisable(GL_COLOR_MATERIAL)
+        glMaterialfv(GL_FRONT, GL_AMBIENT_AND_DIFFUSE, [1.0, 1.0, 1.0, 1.0])
+
+        for unit in self.game_world.units:
             glPushMatrix()
             center = unit.tile.center * 1.01 # Slightly above the tile
             glTranslatef(center[0], center[1], center[2])
-            quad = gluNewQuadric()
-            gluSphere(quad, 0.02, 16, 16)
-            gluDeleteQuadric(quad)
+            glScalef(0.02, 0.02, 0.02) # Scale the model down
+
+            if unit == self.selected_unit:
+                glMaterialfv(GL_FRONT, GL_EMISSION, [0.6, 0.3, 0.0, 1.0])
+            else:
+                glMaterialfv(GL_FRONT, GL_EMISSION, [0.0, 0.0, 0.0, 1.0])
+
+            unit_model.draw()
             glPopMatrix()
-        glEnable(GL_LIGHTING)
+
+        # Reset OpenGL state
+        glMaterialfv(GL_FRONT, GL_EMISSION, [0.0, 0.0, 0.0, 1.0])
+        glEnable(GL_COLOR_MATERIAL)
 
     def draw_possible_moves(self):
         if self.selected_unit:
@@ -307,7 +321,7 @@ class Renderer:
         
         glDisable(GL_LIGHTING)
         glDisable(GL_DEPTH_TEST)
-        glEnable(GL_BLEND)
+        glEnable(G_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
         y_offset = 10
