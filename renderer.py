@@ -321,7 +321,7 @@ class Renderer:
         
         glDisable(GL_LIGHTING)
         glDisable(GL_DEPTH_TEST)
-        glEnable(G_BLEND)
+        glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
         y_offset = 10
