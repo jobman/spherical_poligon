@@ -40,9 +40,15 @@ class InputHandler:
                 self.mouse_dragging = True
                 self.mouse_down_pos = event.pos
             elif event.button == 4: # Zoom in
-                self.camera.target_zoom = max(cfg.MIN_ZOOM, self.camera.target_zoom - self.camera.zoom_speed)
+                zoom_range = cfg.MAX_ZOOM - cfg.MIN_ZOOM
+                current_zoom_ratio = (self.camera.target_zoom - cfg.MIN_ZOOM) / zoom_range if zoom_range != 0 else 0
+                zoom_step = cfg.MIN_ZOOM_STEP + current_zoom_ratio * (cfg.MAX_ZOOM_STEP - cfg.MIN_ZOOM_STEP)
+                self.camera.target_zoom = max(cfg.MIN_ZOOM, self.camera.target_zoom - zoom_step)
             elif event.button == 5: # Zoom out
-                self.camera.target_zoom = min(cfg.MAX_ZOOM, self.camera.target_zoom + self.camera.zoom_speed)
+                zoom_range = cfg.MAX_ZOOM - cfg.MIN_ZOOM
+                current_zoom_ratio = (self.camera.target_zoom - cfg.MIN_ZOOM) / zoom_range if zoom_range != 0 else 0
+                zoom_step = cfg.MIN_ZOOM_STEP + current_zoom_ratio * (cfg.MAX_ZOOM_STEP - cfg.MIN_ZOOM_STEP)
+                self.camera.target_zoom = min(cfg.MAX_ZOOM, self.camera.target_zoom + zoom_step)
         elif event.type == pygame.MOUSEBUTTONUP:
             if event.button == 1 and self.mouse_down_pos:
                 dist_sq = (event.pos[0] - self.mouse_down_pos[0])**2 + (event.pos[1] - self.mouse_down_pos[1])**2
