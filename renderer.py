@@ -224,8 +224,10 @@ class Renderer:
         if not unit_model:
             return
 
-        glDisable(GL_COLOR_MATERIAL)
-        glMaterialfv(GL_FRONT, GL_AMBIENT_AND_DIFFUSE, [1.0, 1.0, 1.0, 1.0])
+        # Set color to white. With GL_COLOR_MATERIAL enabled, this will be used as the
+        # material's ambient and diffuse color, which will then be modulated by the texture.
+        # This ensures the texture appears with its original colors, correctly lit.
+        glColor3f(1.0, 1.0, 1.0)
 
         for unit in self.game_world.units:
             glPushMatrix()
@@ -234,6 +236,7 @@ class Renderer:
             glScalef(0.02, 0.02, 0.02) # Scale the model down
 
             if unit == self.selected_unit:
+                # Use emission to make the selected unit glow
                 glMaterialfv(GL_FRONT, GL_EMISSION, [0.6, 0.3, 0.0, 1.0])
             else:
                 glMaterialfv(GL_FRONT, GL_EMISSION, [0.0, 0.0, 0.0, 1.0])
@@ -241,9 +244,8 @@ class Renderer:
             unit_model.draw()
             glPopMatrix()
 
-        # Reset OpenGL state
+        # Reset emission material property after drawing all units
         glMaterialfv(GL_FRONT, GL_EMISSION, [0.0, 0.0, 0.0, 1.0])
-        glEnable(GL_COLOR_MATERIAL)
 
     def draw_possible_moves(self):
         if self.selected_unit:
