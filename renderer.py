@@ -221,22 +221,45 @@ class Renderer:
 
     def draw_units(self):
         unit_model = self.models.get("unit")
-        if not unit_model:
+        if not unit_model or not unit_model.mesh:
             return
 
-        # Set color to white. With GL_COLOR_MATERIAL enabled, this will be used as the
-        # material's ambient and diffuse color, which will then be modulated by the texture.
-        # This ensures the texture appears with its original colors, correctly lit.
         glColor3f(1.0, 1.0, 1.0)
 
         for unit in self.game_world.units:
             glPushMatrix()
-            center = unit.tile.center * 1.01 # Slightly above the tile
-            glTranslatef(center[0], center[1], center[2])
-            glScalef(0.02, 0.02, 0.02) # Scale the model down
+
+            # -- Align model to tile normal --
+            target_up = unit.tile.normal
+            model_up = np.array([0.0, 1.0, 0.0])
+            
+            target_up_norm = np.linalg.norm(target_up)
+            if target_up_norm > 1e-6:
+                target_up = target_up / target_up_norm
+
+            axis = np.cross(model_up, target_up)
+            axis_norm = np.linalg.norm(axis)
+            
+            angle_rad = np.arccos(np.clip(np.dot(model_up, target_up), -1.0, 1.0))
+            angle_deg = np.degrees(angle_rad)
+
+            # -- Calculate position to place base of the model on the tile --
+            scale = 0.02
+            model_base_y = unit_model.mesh.bounds[0][1]
+            offset_distance = -model_base_y * scale
+            offset_vector = target_up * offset_distance
+            position = unit.tile.center + offset_vector
+
+            # -- Apply transformations --
+            glTranslatef(position[0], position[1], position[2])
+
+            if axis_norm > 1e-6:
+                axis = axis / axis_norm
+                glRotatef(angle_deg, axis[0], axis[1], axis[2])
+
+            glScalef(scale, scale, scale)
 
             if unit == self.selected_unit:
-                # Use emission to make the selected unit glow
                 glMaterialfv(GL_FRONT, GL_EMISSION, [0.6, 0.3, 0.0, 1.0])
             else:
                 glMaterialfv(GL_FRONT, GL_EMISSION, [0.0, 0.0, 0.0, 1.0])
@@ -244,7 +267,6 @@ class Renderer:
             unit_model.draw()
             glPopMatrix()
 
-        # Reset emission material property after drawing all units
         glMaterialfv(GL_FRONT, GL_EMISSION, [0.0, 0.0, 0.0, 1.0])
 
     def draw_possible_moves(self):
