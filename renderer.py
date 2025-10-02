@@ -56,7 +56,7 @@ class Renderer:
         self.river_vert_count = 0
 
         self.prepare_vbos(render_data)
-        self.load_model("unit", "assets/textured_primal_warior.glb")
+        self.load_model("unit", "assets/textured_primal_warior/textured_primal_warior.obj")
 
     def load_model(self, name, file_path):
         self.models[name] = Model(file_path)
