@@ -13,6 +13,8 @@ class Camera:
         self.zoom_smoothing_factor = cfg.ZOOM_SMOOTHING_FACTOR
         self.rotation_sensitivity = cfg.ROTATION_SENSITIVITY
         self.keyboard_rotation_speed = cfg.KEYBOARD_ROTATION_SPEED
+        self.base_distance = 3.0
+        self.surface_radius = 1.0
 
     def update(self):
         # Update camera angles and apply damping
@@ -25,6 +27,12 @@ class Camera:
         self.zoom += (self.target_zoom - self.zoom) * self.zoom_smoothing_factor
 
     def apply_transformations(self):
-        glTranslatef(0.0, 0.0, -3 * self.zoom)
+        glTranslatef(0.0, 0.0, -self.base_distance * self.zoom)
         glRotatef(math.degrees(self.angle_x), 1, 0, 0)
         glRotatef(math.degrees(self.angle_y), 0, 1, 0)
+
+    def get_distance_to_center(self):
+        return self.base_distance * self.zoom
+
+    def get_speed_scale(self):
+        return max(0.0, self.get_distance_to_center() - self.surface_radius)

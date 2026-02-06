@@ -1,6 +1,7 @@
 import pygame
 from pygame.locals import *
 import math
+import numpy as np
 import config as cfg
 
 class InputHandler:
@@ -11,6 +12,12 @@ class InputHandler:
         self.mouse_dragging = False
         self.click_to_process = None
         self.mouse_down_pos = None
+        self.camera.surface_radius = self._estimate_surface_radius(game_world)
+
+    def _estimate_surface_radius(self, game_world):
+        if game_world.tiles:
+            return float(np.linalg.norm(game_world.tiles[0].center))
+        return 1.0
 
     def handle_events(self, events):
         for event in events:
@@ -26,10 +33,11 @@ class InputHandler:
 
     def handle_keyboard_input(self, keys):
         inversion_factor = -1 if math.cos(self.camera.angle_x) < 0 else 1
-        if keys[pygame.K_w]: self.camera.angle_x_vel += self.camera.keyboard_rotation_speed
-        if keys[pygame.K_s]: self.camera.angle_x_vel -= self.camera.keyboard_rotation_speed
-        if keys[pygame.K_a]: self.camera.angle_y_vel += self.camera.keyboard_rotation_speed * inversion_factor
-        if keys[pygame.K_d]: self.camera.angle_y_vel -= self.camera.keyboard_rotation_speed * inversion_factor
+        speed_scale = self.camera.get_speed_scale()
+        if keys[pygame.K_w]: self.camera.angle_x_vel += self.camera.keyboard_rotation_speed * speed_scale
+        if keys[pygame.K_s]: self.camera.angle_x_vel -= self.camera.keyboard_rotation_speed * speed_scale
+        if keys[pygame.K_a]: self.camera.angle_y_vel += self.camera.keyboard_rotation_speed * speed_scale * inversion_factor
+        if keys[pygame.K_d]: self.camera.angle_y_vel -= self.camera.keyboard_rotation_speed * speed_scale * inversion_factor
 
     def handle_mouse_input(self, event):
         if event.type == pygame.KEYDOWN:
@@ -59,6 +67,7 @@ class InputHandler:
         elif event.type == pygame.MOUSEMOTION:
             if self.mouse_dragging:
                 inversion_factor = -1 if math.cos(self.camera.angle_x) < 0 else 1
+                speed_scale = self.camera.get_speed_scale()
                 rel_x, rel_y = event.rel
-                self.camera.angle_y_vel += rel_x * self.camera.rotation_sensitivity * 0.01 * inversion_factor
-                self.camera.angle_x_vel += rel_y * self.camera.rotation_sensitivity * 0.01
+                self.camera.angle_y_vel += rel_x * self.camera.rotation_sensitivity * 0.01 * speed_scale * inversion_factor
+                self.camera.angle_x_vel += rel_y * self.camera.rotation_sensitivity * 0.01 * speed_scale
