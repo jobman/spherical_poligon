@@ -1,23 +1,57 @@
-
 import numpy as np
+from dataclasses import dataclass
 from config import TerrainType
+from geometry import Vertex
+
+@dataclass
+class SubTile:
+    vertices: list
+    color: np.ndarray
+
+def generate_serialized_subtiles_for_tile(
+    tile_id,
+    vertex_coords,
+    normal,
+    min_distance_factor,
+    edge_spacing_factor,
+    max_interior_points,
+    candidate_batch_size,
+    max_stagnation
+):
+    vertices = [Vertex(*coords) for coords in vertex_coords]
+    tile = Tile(tile_id, vertices, np.asarray(normal, dtype=np.float32))
+    tile.generate_subtiles(
+        min_distance_factor=min_distance_factor,
+        edge_spacing_factor=edge_spacing_factor,
+        max_interior_points=max_interior_points,
+        candidate_batch_size=candidate_batch_size,
+        max_stagnation=max_stagnation
+    )
+    return tile_id, [
+        [np.asarray(vertex, dtype=np.float32) for vertex in subtile.vertices]
+        for subtile in tile.subtiles
+    ]
 
 class Tile:
     def __init__(self, id, vertices, normal):
         self.id = id
         self.vertices = vertices
         self.normal = normal
+        self._center = np.mean([v.to_np() for v in self.vertices], axis=0).astype(np.float32)
         self.terrain_type = None
         self.height = 0.0
         self.neighbors = []
         self.is_selected = False
         self.unit = None
+        self.subtiles = []
 
     def __getstate__(self):
         state = self.__dict__.copy()
         # Don't pickle neighbors, it's rebuilt
         if 'neighbors' in state:
             del state['neighbors']
+        if 'subtiles' in state:
+            del state['subtiles']
         return state
 
     def __setstate__(self, state):
@@ -25,6 +59,8 @@ class Tile:
         self.neighbors = []
         self.unit = None
         self.is_selected = False
+        self.subtiles = []
+        self._center = np.mean([v.to_np() for v in self.vertices], axis=0).astype(np.float32)
 
     def is_water(self):
         return self.terrain_type in [TerrainType.OCEAN, TerrainType.COAST, TerrainType.ICE]
@@ -35,7 +71,248 @@ class Tile:
 
     @property
     def center(self):
-        return np.mean([v.to_np() for v in self.vertices], axis=0)
+        return self._center
+
+    def generate_subtiles(
+        self,
+        min_distance_factor=0.55,
+        edge_spacing_factor=0.9,
+        max_interior_points=18,
+        candidate_batch_size=24,
+        max_stagnation=12
+    ):
+        vertex_count = len(self.vertices)
+        if vertex_count < 3:
+            self.subtiles = []
+            return
+
+        polygon_2d, basis_origin, basis_u, basis_v = self._project_polygon_to_2d()
+        edge_lengths = [
+            np.linalg.norm(polygon_2d[(i + 1) % vertex_count] - polygon_2d[i])
+            for i in range(vertex_count)
+        ]
+        average_edge_length = float(np.mean(edge_lengths))
+
+        min_distance = average_edge_length * min_distance_factor
+        edge_spacing = max(min_distance, average_edge_length * edge_spacing_factor)
+
+        seed_points = []
+
+        # Stage 1: place points on the tile vertices.
+        for vertex in polygon_2d:
+            seed_points.append(vertex.copy())
+
+        # Stage 2: place points only on tile edges.
+        seed_points.extend(self._generate_edge_points(polygon_2d, edge_spacing, min_distance))
+
+        # Stage 3: place points only inside the tile with a distance threshold.
+        seed_points.extend(
+            self._generate_interior_points(
+                polygon_2d,
+                seed_points,
+                min_distance,
+                max_interior_points,
+                candidate_batch_size,
+                max_stagnation
+            )
+        )
+
+        subtiles = []
+        for point_index, seed in enumerate(seed_points):
+            cell = self._build_voronoi_cell(seed, seed_points, polygon_2d)
+            if len(cell) < 3:
+                continue
+
+            polygon_3d = [basis_origin + basis_u * point[0] + basis_v * point[1] for point in cell]
+            subtiles.append(SubTile(polygon_3d, self._get_subtile_color(point_index)))
+
+        self.subtiles = subtiles
+
+    def _project_polygon_to_2d(self):
+        center = self.center
+        normal = self.normal / np.linalg.norm(self.normal)
+
+        basis_u = self.vertices[0].to_np() - center
+        basis_u -= normal * np.dot(basis_u, normal)
+        if np.linalg.norm(basis_u) < 1e-8:
+            fallback = np.array([1.0, 0.0, 0.0])
+            if abs(np.dot(fallback, normal)) > 0.9:
+                fallback = np.array([0.0, 1.0, 0.0])
+            basis_u = np.cross(normal, fallback)
+        basis_u /= np.linalg.norm(basis_u)
+
+        basis_v = np.cross(normal, basis_u)
+        basis_v /= np.linalg.norm(basis_v)
+
+        polygon_2d = []
+        for vertex in self.vertices:
+            offset = vertex.to_np() - center
+            polygon_2d.append(np.array([np.dot(offset, basis_u), np.dot(offset, basis_v)], dtype=np.float32))
+
+        return polygon_2d, center, basis_u, basis_v
+
+    def _generate_edge_points(self, polygon_2d, edge_spacing, min_distance):
+        edge_points = []
+        vertex_count = len(polygon_2d)
+
+        for i in range(vertex_count):
+            start = polygon_2d[i]
+            end = polygon_2d[(i + 1) % vertex_count]
+            edge_length = np.linalg.norm(end - start)
+            segment_count = max(1, int(np.floor(edge_length / edge_spacing)))
+
+            for step in range(1, segment_count):
+                t = step / segment_count
+                point = start * (1.0 - t) + end * t
+                if self._is_far_enough(point, polygon_2d + edge_points, min_distance * 0.98):
+                    edge_points.append(point)
+
+        return edge_points
+
+    def _generate_interior_points(
+        self,
+        polygon_2d,
+        existing_points,
+        min_distance,
+        max_interior_points,
+        candidate_batch_size,
+        max_stagnation
+    ):
+        rng = np.random.default_rng(self.id)
+        interior_points = []
+        all_points = list(existing_points)
+        polygon_array = np.asarray(polygon_2d, dtype=np.float64)
+        min_bounds = polygon_array.min(axis=0)
+        max_bounds = polygon_array.max(axis=0)
+
+        if (
+            polygon_array.ndim != 2 or
+            polygon_array.shape[1] != 2 or
+            not np.isfinite(min_bounds).all() or
+            not np.isfinite(max_bounds).all()
+        ):
+            return interior_points
+
+        min_x = float(min_bounds[0])
+        min_y = float(min_bounds[1])
+        max_x = float(max_bounds[0])
+        max_y = float(max_bounds[1])
+
+        if max_x - min_x < 1e-8 or max_y - min_y < 1e-8:
+            return interior_points
+
+        stagnation = 0
+        while len(interior_points) < max_interior_points and stagnation < max_stagnation:
+            best_candidate = None
+            best_distance = -1.0
+
+            for _ in range(candidate_batch_size):
+                candidate = np.array([
+                    rng.uniform(min_x, max_x),
+                    rng.uniform(min_y, max_y),
+                ], dtype=np.float64)
+                if not self._point_in_polygon(candidate, polygon_2d):
+                    continue
+
+                nearest_distance = self._nearest_distance(candidate, all_points)
+                if nearest_distance < min_distance:
+                    continue
+
+                if nearest_distance > best_distance:
+                    best_distance = nearest_distance
+                    best_candidate = candidate
+
+            if best_candidate is None:
+                stagnation += 1
+                continue
+
+            interior_points.append(best_candidate)
+            all_points.append(best_candidate)
+            stagnation = 0
+
+        return interior_points
+
+    def _build_voronoi_cell(self, seed, all_points, boundary_polygon):
+        cell = [point.copy() for point in boundary_polygon]
+
+        for other in all_points:
+            if np.allclose(seed, other):
+                continue
+
+            mid_point = (seed + other) * 0.5
+            normal = other - seed
+            cell = self._clip_polygon_with_half_plane(cell, mid_point, normal)
+            if len(cell) < 3:
+                return []
+
+        return cell
+
+    def _clip_polygon_with_half_plane(self, polygon, line_point, line_normal):
+        if not polygon:
+            return []
+
+        clipped = []
+        previous = polygon[-1]
+        previous_inside = self._is_inside_half_plane(previous, line_point, line_normal)
+
+        for current in polygon:
+            current_inside = self._is_inside_half_plane(current, line_point, line_normal)
+
+            if current_inside != previous_inside:
+                intersection = self._line_half_plane_intersection(previous, current, line_point, line_normal)
+                if intersection is not None:
+                    clipped.append(intersection)
+
+            if current_inside:
+                clipped.append(current)
+
+            previous = current
+            previous_inside = current_inside
+
+        return clipped
+
+    def _is_inside_half_plane(self, point, line_point, line_normal):
+        return np.dot(point - line_point, line_normal) <= 1e-6
+
+    def _line_half_plane_intersection(self, start, end, line_point, line_normal):
+        direction = end - start
+        denominator = np.dot(direction, line_normal)
+        if abs(denominator) < 1e-8:
+            return None
+
+        t = np.dot(line_point - start, line_normal) / denominator
+        t = np.clip(t, 0.0, 1.0)
+        return start + direction * t
+
+    def _point_in_polygon(self, point, polygon):
+        inside = False
+        j = len(polygon) - 1
+
+        for i in range(len(polygon)):
+            pi = polygon[i]
+            pj = polygon[j]
+            intersects = ((pi[1] > point[1]) != (pj[1] > point[1])) and (
+                point[0] < (pj[0] - pi[0]) * (point[1] - pi[1]) / ((pj[1] - pi[1]) + 1e-12) + pi[0]
+            )
+            if intersects:
+                inside = not inside
+            j = i
+
+        return inside
+
+    def _is_far_enough(self, point, others, min_distance):
+        return self._nearest_distance(point, others) >= min_distance
+
+    def _nearest_distance(self, point, others):
+        if not others:
+            return float("inf")
+        return min(np.linalg.norm(point - other) for other in others)
+
+    def _get_subtile_color(self, point_index):
+        base_color = self.color.astype(np.float32)
+        noise_bucket = (self.id * 97 + point_index * 13) % 11
+        brightness_shift = (noise_bucket - 5) * 0.03
+        return np.clip(base_color * (1.0 + brightness_shift), 0, 255)
         
     def __repr__(self):
         return f"Tile({self.id}, terrain={self.terrain_type.name if self.terrain_type else 'None'}, height={self.height:.2f})"

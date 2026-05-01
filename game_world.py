@@ -1,8 +1,9 @@
 import math
 from collections import defaultdict
 import numpy as np
+from concurrent.futures import ProcessPoolExecutor
 from geometry import Vertex
-from tile import Tile
+from tile import Tile, generate_serialized_subtiles_for_tile
 from config import TerrainType
 import pickle
 import os
@@ -25,6 +26,12 @@ class GameWorld:
         self.river_paths = []
         self.river_flow = {}
         self.spatial_hash_grid = None
+        self.subtile_cache_filename = f"subtile_cache_level_{self.subdivision_level}.pkl"
+        self.subtile_cache = {}
+        self.tile_centers = np.empty((0, 3), dtype=np.float32)
+        self.pending_cache_save_count = 0
+        self.subtile_executor = None
+        self.subtile_futures = {}
 
         # For testing, create one unit
         # This line needs to be placed after tiles are initialized and the world is loaded/generated.
@@ -55,6 +62,10 @@ class GameWorld:
             with open(cache_filename, 'wb') as f:
                 pickle.dump(self.__dict__, f)
             self.vert_to_tiles = transient_data["vert_to_tiles"]
+
+        self._load_subtile_cache()
+        self._build_tile_centers()
+        self._start_subtile_executor()
 
         print(f"World created with {len(self.tiles)} tiles.")
 
@@ -104,6 +115,9 @@ class GameWorld:
             tile_colors=np.array(tile_colors, dtype=np.float32),
             tile_normals=np.array(tile_normals, dtype=np.float32),
             edge_vertices=np.array(edge_vertices, dtype=np.float32),
+            subtile_vertices=np.array([], dtype=np.float32),
+            subtile_colors=np.array([], dtype=np.float32),
+            subtile_edge_vertices=np.array([], dtype=np.float32),
             river_vertices=np.array(river_vertices, dtype=np.float32),
             river_colors=np.array(river_colors, dtype=np.float32)
         )
@@ -142,13 +156,186 @@ class GameWorld:
         river_gen = RiverGenerator(self.vertices, self.vert_to_tiles, self.vert_neighbors)
         return river_gen.generate_rivers(num_rivers)
 
+    def ensure_subtiles_generated(self, tiles):
+        self._collect_completed_subtile_tasks()
+
+        for tile in tiles:
+            if tile.subtiles:
+                continue
+
+            cached_subtiles = self.subtile_cache.get(tile.id)
+            if cached_subtiles is not None:
+                tile.subtiles = self._deserialize_subtiles(cached_subtiles)
+                continue
+
+            if tile.id in self.subtile_futures:
+                continue
+            if len(self.subtile_futures) >= cfg.SUBTILE_MAX_IN_FLIGHT_TASKS:
+                break
+            self._submit_subtile_task(tile)
+
+    def get_visible_tiles_for_subtiles(self, camera, aspect_ratio, limit=cfg.SUBTILE_VISIBLE_TILE_LIMIT, screen_margin=cfg.SUBTILE_SCREEN_MARGIN):
+        half_fov_y = math.radians(45.0) * 0.5
+        tan_half_fov_y = math.tan(half_fov_y)
+        camera_distance = camera.get_distance_to_center()
+        rotated_centers = camera.rotate_world_points(self.tile_centers)
+        camera_space_z = rotated_centers[:, 2] - camera_distance
+        front_mask = camera_space_z < -0.05
+        if not np.any(front_mask):
+            return []
+
+        candidate_indices = np.flatnonzero(front_mask)
+        candidate_centers = rotated_centers[candidate_indices]
+        candidate_z = camera_space_z[candidate_indices]
+
+        projected_half_height = -candidate_z * tan_half_fov_y
+        projected_half_width = projected_half_height * aspect_ratio
+        projection_mask = (projected_half_height > 1e-6) & (projected_half_width > 1e-6)
+        if not np.any(projection_mask):
+            return []
+
+        candidate_indices = candidate_indices[projection_mask]
+        candidate_centers = candidate_centers[projection_mask]
+        candidate_z = candidate_z[projection_mask]
+        projected_half_height = projected_half_height[projection_mask]
+        projected_half_width = projected_half_width[projection_mask]
+
+        ndc_x = candidate_centers[:, 0] / projected_half_width
+        ndc_y = candidate_centers[:, 1] / projected_half_height
+        screen_mask = (np.abs(ndc_x) <= screen_margin) & (np.abs(ndc_y) <= screen_margin)
+        if not np.any(screen_mask):
+            return []
+
+        candidate_indices = candidate_indices[screen_mask]
+        candidate_z = candidate_z[screen_mask]
+        ndc_x = ndc_x[screen_mask]
+        ndc_y = ndc_y[screen_mask]
+
+        screen_distance_sq = ndc_x * ndc_x + ndc_y * ndc_y
+        order = np.lexsort((-candidate_z, screen_distance_sq))
+        selected_indices = candidate_indices[order[:limit]]
+        return [self.tiles[int(index)] for index in selected_indices]
+
+    def _load_subtile_cache(self):
+        if not os.path.exists(self.subtile_cache_filename):
+            return
+
+        try:
+            with open(self.subtile_cache_filename, 'rb') as f:
+                cache_data = pickle.load(f)
+        except Exception as exc:
+            print(f"Could not load subtile cache: {exc}")
+            return
+
+        if not isinstance(cache_data, dict):
+            return
+
+        self.subtile_cache = cache_data
+
+    def _save_subtile_cache(self):
+        try:
+            with open(self.subtile_cache_filename, 'wb') as f:
+                pickle.dump(self.subtile_cache, f)
+        except Exception as exc:
+            print(f"Could not save subtile cache: {exc}")
+
+    def flush_subtile_cache(self):
+        self._collect_completed_subtile_tasks()
+        if self.pending_cache_save_count > 0:
+            self._save_subtile_cache()
+            self.pending_cache_save_count = 0
+
+    def shutdown(self):
+        if self.subtile_executor is not None:
+            remaining_futures = list(self.subtile_futures.values())
+            for future in remaining_futures:
+                try:
+                    tile_id, serialized_subtiles = future.result()
+                    self.subtile_cache[tile_id] = serialized_subtiles
+                    self.tiles[tile_id].subtiles = self._deserialize_subtiles(serialized_subtiles)
+                    self.pending_cache_save_count += 1
+                except Exception as exc:
+                    print(f"Could not finish subtile task during shutdown: {exc}")
+            self.subtile_futures.clear()
+            self.subtile_executor.shutdown(wait=True, cancel_futures=False)
+            self.subtile_executor = None
+        self.flush_subtile_cache()
+
+    def _build_tile_centers(self):
+        if not self.tiles:
+            self.tile_centers = np.empty((0, 3), dtype=np.float32)
+            return
+        self.tile_centers = np.array([tile.center for tile in self.tiles], dtype=np.float32)
+
+    def _start_subtile_executor(self):
+        self.subtile_executor = ProcessPoolExecutor(max_workers=cfg.SUBTILE_BACKGROUND_WORKERS)
+
+    def _submit_subtile_task(self, tile):
+        if self.subtile_executor is None:
+            return
+
+        future = self.subtile_executor.submit(
+            generate_serialized_subtiles_for_tile,
+            tile.id,
+            [vertex.to_np() for vertex in tile.vertices],
+            tile.normal,
+            cfg.SUBTILE_MIN_DISTANCE_FACTOR,
+            cfg.SUBTILE_EDGE_POINT_SPACING_FACTOR,
+            cfg.SUBTILE_MAX_INTERIOR_POINTS,
+            cfg.SUBTILE_CANDIDATE_BATCH_SIZE,
+            cfg.SUBTILE_MAX_STAGNATION
+        )
+        self.subtile_futures[tile.id] = future
+
+    def _collect_completed_subtile_tasks(self):
+        if not self.subtile_futures:
+            return
+
+        completed_tile_ids = []
+        for tile_id, future in self.subtile_futures.items():
+            if not future.done():
+                continue
+            completed_tile_ids.append(tile_id)
+            try:
+                _, serialized_subtiles = future.result()
+            except Exception as exc:
+                print(f"Could not generate subtiles for tile {tile_id}: {exc}")
+                continue
+
+            self.subtile_cache[tile_id] = serialized_subtiles
+            self.tiles[tile_id].subtiles = self._deserialize_subtiles(serialized_subtiles)
+            self.pending_cache_save_count += 1
+
+        for tile_id in completed_tile_ids:
+            self.subtile_futures.pop(tile_id, None)
+
+    def _serialize_subtiles(self, subtiles):
+        serialized = []
+        for subtile in subtiles:
+            serialized.append([
+                np.asarray(vertex, dtype=np.float32)
+                for vertex in subtile.vertices
+            ])
+        return serialized
+
+    def _deserialize_subtiles(self, serialized_subtiles):
+        from tile import SubTile
+
+        return [
+            SubTile(
+                vertices=[np.asarray(vertex, dtype=np.float32) for vertex in polygon],
+                color=np.array([0, 0, 0], dtype=np.float32)
+            )
+            for polygon in serialized_subtiles
+        ]
+
     def _assign_terrain_and_heights(self):
         print("Assigning terrain and heights...")
         land_noise = PerlinNoise(octaves=8, seed=1)
         height_noise = PerlinNoise(octaves=12, seed=2)
 
         for tile in self.tiles:
-            tile_center = np.mean([v.to_np() for v in tile.vertices], axis=0)
+            tile_center = tile.center
             is_land = land_noise((tile_center * 0.5).tolist()) > 0.05
             lat = math.asin(tile_center[1]) * 180 / math.pi
 

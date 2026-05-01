@@ -8,5 +8,8 @@ class RenderData:
     tile_colors: np.ndarray = field(default_factory=lambda: np.array([]))
     tile_normals: np.ndarray = field(default_factory=lambda: np.array([]))
     edge_vertices: np.ndarray = field(default_factory=lambda: np.array([]))
+    subtile_vertices: np.ndarray = field(default_factory=lambda: np.array([]))
+    subtile_colors: np.ndarray = field(default_factory=lambda: np.array([]))
+    subtile_edge_vertices: np.ndarray = field(default_factory=lambda: np.array([]))
     river_vertices: np.ndarray = field(default_factory=lambda: np.array([]))
     river_colors: np.ndarray = field(default_factory=lambda: np.array([]))

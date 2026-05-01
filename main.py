@@ -19,5 +19,6 @@ if __name__ == "__main__":
     running = True
     while running:
         running = renderer.run_frame()
-    
+
+    game_world.shutdown()
     pygame.quit()

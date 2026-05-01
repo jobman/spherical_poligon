@@ -50,6 +50,7 @@ class Renderer:
         self.tile_vbo_edges = None
         self.river_vbo_verts = None
         self.river_vbo_colors = None
+        self.subtile_edge_vbos = {}
         
         self.tile_vert_count = 0
         self.tile_edge_count = 0
@@ -194,6 +195,7 @@ class Renderer:
             glDisableClientState(GL_COLOR_ARRAY)
             glEnable(GL_LIGHTING)
 
+        self.draw_subtiles()
         self.draw_selected_tile()
         self.draw_units()
         self.draw_possible_moves()
@@ -218,6 +220,81 @@ class Renderer:
             glEnd()
             
             glEnable(GL_LIGHTING)
+
+    def draw_subtiles(self):
+        if not self._should_render_subtiles():
+            return
+
+        aspect_ratio = self.width / self.height if self.height else 1.0
+        visible_tiles = self.game_world.get_visible_tiles_for_subtiles(self.camera, aspect_ratio)
+        if not visible_tiles:
+            return
+
+        self.game_world.ensure_subtiles_generated(visible_tiles)
+        visible_subtile_vbos = [
+            prepared_vbo
+            for tile in visible_tiles
+            if (prepared_vbo := self._get_subtile_edge_vbo(tile)) is not None
+        ]
+        if not visible_subtile_vbos:
+            return
+
+        glDisable(GL_LIGHTING)
+        glEnable(GL_DEPTH_TEST)
+
+        glColor3f(0.65, 0.65, 0.65)
+        glLineWidth(1.2)
+        glEnableClientState(GL_VERTEX_ARRAY)
+        for edge_vbo, edge_count in visible_subtile_vbos:
+            glBindBuffer(GL_ARRAY_BUFFER, edge_vbo)
+            glVertexPointer(3, GL_FLOAT, 0, None)
+            glDrawArrays(GL_LINES, 0, edge_count)
+        glDisableClientState(GL_VERTEX_ARRAY)
+
+        glEnable(GL_LIGHTING)
+
+    def _should_render_subtiles(self):
+        reveal_zoom = cfg.MIN_ZOOM + cfg.SUBTILE_VISIBILITY_MARGIN
+        return self.camera.zoom <= reveal_zoom
+
+    def _get_subtile_edge_vbo(self, tile):
+        if not tile.subtiles:
+            return None
+
+        cached_vbo = self.subtile_edge_vbos.get(tile.id)
+        subtile_count = len(tile.subtiles)
+        if cached_vbo is not None and cached_vbo[2] == subtile_count:
+            return cached_vbo[0], cached_vbo[1]
+
+        edge_vertices = []
+        seen_edges = set()
+        for subtile in tile.subtiles:
+            if len(subtile.vertices) < 2:
+                continue
+            for index in range(len(subtile.vertices)):
+                start = subtile.vertices[index] * 1.0025
+                end = subtile.vertices[(index + 1) % len(subtile.vertices)] * 1.0025
+                edge_key = self._subtile_edge_key(start, end)
+                if edge_key in seen_edges:
+                    continue
+                seen_edges.add(edge_key)
+                edge_vertices.extend([start, end])
+
+        edge_array = np.array(edge_vertices, dtype=np.float32)
+        edge_count = len(edge_array)
+        if edge_count == 0:
+            return None
+
+        edge_vbo = cached_vbo[0] if cached_vbo is not None else glGenBuffers(1)
+        glBindBuffer(GL_ARRAY_BUFFER, edge_vbo)
+        glBufferData(GL_ARRAY_BUFFER, edge_array, GL_STATIC_DRAW)
+        self.subtile_edge_vbos[tile.id] = (edge_vbo, edge_count, subtile_count)
+        return edge_vbo, edge_count
+
+    def _subtile_edge_key(self, start, end):
+        a = tuple(np.round(start, 7))
+        b = tuple(np.round(end, 7))
+        return (a, b) if a <= b else (b, a)
 
     def draw_units(self):
         unit_model = self.models.get("unit")

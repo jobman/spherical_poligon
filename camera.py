@@ -1,4 +1,5 @@
 import math
+import numpy as np
 import config as cfg
 from OpenGL.GL import glRotatef, glTranslatef
 
@@ -36,3 +37,38 @@ class Camera:
 
     def get_speed_scale(self):
         return max(0.0, self.get_distance_to_center() - self.surface_radius)
+
+    def rotate_world_point(self, point):
+        x, y, z = point
+
+        cos_y = math.cos(self.angle_y)
+        sin_y = math.sin(self.angle_y)
+        x1 = x * cos_y + z * sin_y
+        y1 = y
+        z1 = -x * sin_y + z * cos_y
+
+        cos_x = math.cos(self.angle_x)
+        sin_x = math.sin(self.angle_x)
+        x2 = x1
+        y2 = y1 * cos_x - z1 * sin_x
+        z2 = y1 * sin_x + z1 * cos_x
+
+        return np.array([x2, y2, z2], dtype=np.float32)
+
+    def rotate_world_points(self, points):
+        if len(points) == 0:
+            return np.empty((0, 3), dtype=np.float32)
+
+        cos_y = math.cos(self.angle_y)
+        sin_y = math.sin(self.angle_y)
+        cos_x = math.cos(self.angle_x)
+        sin_x = math.sin(self.angle_x)
+
+        x1 = points[:, 0] * cos_y + points[:, 2] * sin_y
+        y1 = points[:, 1]
+        z1 = -points[:, 0] * sin_y + points[:, 2] * cos_y
+
+        y2 = y1 * cos_x - z1 * sin_x
+        z2 = y1 * sin_x + z1 * cos_x
+
+        return np.column_stack((x1, y2, z2)).astype(np.float32, copy=False)
