@@ -1,3 +1,4 @@
+import math
 import numpy as np
 from dataclasses import dataclass
 from config import TerrainType
@@ -119,7 +120,7 @@ class Tile:
 
         subtiles = []
         for point_index, seed in enumerate(seed_points):
-            cell = self._build_voronoi_cell(seed, seed_points, polygon_2d)
+            cell = self._build_voronoi_cell(point_index, seed, seed_points, polygon_2d)
             if len(cell) < 3:
                 continue
 
@@ -202,25 +203,33 @@ class Tile:
             return interior_points
 
         stagnation = 0
+        min_distance_sq = min_distance * min_distance
+        all_points_array = np.asarray(all_points, dtype=np.float64).reshape(-1, 2)
         while len(interior_points) < max_interior_points and stagnation < max_stagnation:
             best_candidate = None
             best_distance = -1.0
 
-            for _ in range(candidate_batch_size):
-                candidate = np.array([
-                    rng.uniform(min_x, max_x),
-                    rng.uniform(min_y, max_y),
-                ], dtype=np.float64)
-                if not self._point_in_polygon(candidate, polygon_2d):
-                    continue
+            candidates = np.column_stack((
+                rng.uniform(min_x, max_x, candidate_batch_size),
+                rng.uniform(min_y, max_y, candidate_batch_size),
+            ))
+            inside_mask = self._points_in_polygon(candidates, polygon_array)
+            candidates = candidates[inside_mask]
 
-                nearest_distance = self._nearest_distance(candidate, all_points)
-                if nearest_distance < min_distance:
-                    continue
+            if len(candidates) > 0:
+                if len(all_points_array) == 0:
+                    nearest_distance_sq = np.full(len(candidates), float("inf"), dtype=np.float64)
+                else:
+                    offsets = candidates[:, None, :] - all_points_array[None, :, :]
+                    nearest_distance_sq = np.min(np.sum(offsets * offsets, axis=2), axis=1)
+                valid_mask = nearest_distance_sq >= min_distance_sq
 
-                if nearest_distance > best_distance:
-                    best_distance = nearest_distance
-                    best_candidate = candidate
+                if np.any(valid_mask):
+                    valid_candidates = candidates[valid_mask]
+                    valid_distances = nearest_distance_sq[valid_mask]
+                    best_index = int(np.argmax(valid_distances))
+                    best_distance = float(valid_distances[best_index])
+                    best_candidate = valid_candidates[best_index]
 
             if best_candidate is None:
                 stagnation += 1
@@ -228,15 +237,16 @@ class Tile:
 
             interior_points.append(best_candidate)
             all_points.append(best_candidate)
+            all_points_array = np.vstack((all_points_array, best_candidate))
             stagnation = 0
 
         return interior_points
 
-    def _build_voronoi_cell(self, seed, all_points, boundary_polygon):
+    def _build_voronoi_cell(self, seed_index, seed, all_points, boundary_polygon):
         cell = [point.copy() for point in boundary_polygon]
 
-        for other in all_points:
-            if np.allclose(seed, other):
+        for other_index, other in enumerate(all_points):
+            if other_index == seed_index:
                 continue
 
             mid_point = (seed + other) * 0.5
@@ -245,7 +255,7 @@ class Tile:
             if len(cell) < 3:
                 return []
 
-        return cell
+        return self._clean_polygon_vertices(cell)
 
     def _clip_polygon_with_half_plane(self, polygon, line_point, line_normal):
         if not polygon:
@@ -269,7 +279,40 @@ class Tile:
             previous = current
             previous_inside = current_inside
 
-        return clipped
+        return self._remove_duplicate_polygon_vertices(clipped)
+
+    def _remove_duplicate_polygon_vertices(self, polygon, distance_epsilon=1e-8):
+        if len(polygon) < 2:
+            return polygon
+
+        cleaned = []
+        for point in polygon:
+            if cleaned and np.sum((point - cleaned[-1]) * (point - cleaned[-1])) <= distance_epsilon * distance_epsilon:
+                continue
+            cleaned.append(point)
+
+        if len(cleaned) > 1 and np.sum((cleaned[0] - cleaned[-1]) * (cleaned[0] - cleaned[-1])) <= distance_epsilon * distance_epsilon:
+            cleaned.pop()
+
+        return cleaned
+
+    def _clean_polygon_vertices(self, polygon, distance_epsilon=1e-8, collinear_epsilon=1e-10):
+        cleaned = self._remove_duplicate_polygon_vertices(polygon, distance_epsilon)
+        if len(cleaned) < 3:
+            return cleaned
+
+        result = []
+        for index, point in enumerate(cleaned):
+            previous = cleaned[index - 1]
+            following = cleaned[(index + 1) % len(cleaned)]
+            edge_a = point - previous
+            edge_b = following - point
+            cross = edge_a[0] * edge_b[1] - edge_a[1] * edge_b[0]
+            if abs(cross) <= collinear_epsilon and np.dot(edge_a, edge_b) >= 0:
+                continue
+            result.append(point)
+
+        return result
 
     def _is_inside_half_plane(self, point, line_point, line_normal):
         return np.dot(point - line_point, line_normal) <= 1e-6
@@ -300,13 +343,39 @@ class Tile:
 
         return inside
 
+    def _points_in_polygon(self, points, polygon):
+        if len(points) == 0:
+            return np.zeros(0, dtype=bool)
+
+        inside = np.zeros(len(points), dtype=bool)
+        j = len(polygon) - 1
+
+        for i in range(len(polygon)):
+            pi = polygon[i]
+            pj = polygon[j]
+            intersects = ((pi[1] > points[:, 1]) != (pj[1] > points[:, 1])) & (
+                points[:, 0] < (pj[0] - pi[0]) * (points[:, 1] - pi[1]) / ((pj[1] - pi[1]) + 1e-12) + pi[0]
+            )
+            inside ^= intersects
+            j = i
+
+        return inside
+
     def _is_far_enough(self, point, others, min_distance):
-        return self._nearest_distance(point, others) >= min_distance
+        return self._nearest_distance_sq(point, others) >= min_distance * min_distance
 
     def _nearest_distance(self, point, others):
+        nearest_distance_sq = self._nearest_distance_sq(point, others)
+        if not np.isfinite(nearest_distance_sq):
+            return nearest_distance_sq
+        return math.sqrt(nearest_distance_sq)
+
+    def _nearest_distance_sq(self, point, others):
         if not others:
             return float("inf")
-        return min(np.linalg.norm(point - other) for other in others)
+        other_points = np.asarray(others, dtype=np.float64)
+        offsets = other_points - point
+        return float(np.min(np.sum(offsets * offsets, axis=1)))
 
     def _get_subtile_color(self, point_index):
         base_color = self.color.astype(np.float32)

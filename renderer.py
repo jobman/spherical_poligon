@@ -268,12 +268,20 @@ class Renderer:
 
         edge_vertices = []
         seen_edges = set()
+
         for subtile in tile.subtiles:
             if len(subtile.vertices) < 2:
                 continue
             for index in range(len(subtile.vertices)):
-                start = subtile.vertices[index] * 1.0025
-                end = subtile.vertices[(index + 1) % len(subtile.vertices)] * 1.0025
+                raw_start = subtile.vertices[index]
+                raw_end = subtile.vertices[(index + 1) % len(subtile.vertices)]
+                if self._is_tile_boundary_edge(tile, raw_start, raw_end):
+                    continue
+
+                start = raw_start * 1.0025
+                end = raw_end * 1.0025
+                if np.sum((start - end) * (start - end)) <= 1e-12:
+                    continue
                 edge_key = self._subtile_edge_key(start, end)
                 if edge_key in seen_edges:
                     continue
@@ -292,9 +300,35 @@ class Renderer:
         return edge_vbo, edge_count
 
     def _subtile_edge_key(self, start, end):
-        a = tuple(np.round(start, 7))
-        b = tuple(np.round(end, 7))
+        a = tuple(np.round(start, 6))
+        b = tuple(np.round(end, 6))
         return (a, b) if a <= b else (b, a)
+
+    def _is_tile_boundary_edge(self, tile, start, end):
+        boundary_epsilon_sq = 1e-8
+        tile_vertices = [vertex.to_np() for vertex in tile.vertices]
+
+        for index in range(len(tile_vertices)):
+            segment_start = tile_vertices[index]
+            segment_end = tile_vertices[(index + 1) % len(tile_vertices)]
+            if (
+                self._point_segment_distance_sq(start, segment_start, segment_end) <= boundary_epsilon_sq and
+                self._point_segment_distance_sq(end, segment_start, segment_end) <= boundary_epsilon_sq
+            ):
+                return True
+
+        return False
+
+    def _point_segment_distance_sq(self, point, segment_start, segment_end):
+        segment = segment_end - segment_start
+        segment_length_sq = float(np.dot(segment, segment))
+        if segment_length_sq <= 1e-16:
+            return float(np.sum((point - segment_start) * (point - segment_start)))
+
+        t = float(np.dot(point - segment_start, segment) / segment_length_sq)
+        t = np.clip(t, 0.0, 1.0)
+        closest = segment_start + segment * t
+        return float(np.sum((point - closest) * (point - closest)))
 
     def draw_units(self):
         unit_model = self.models.get("unit")

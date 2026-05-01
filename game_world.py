@@ -26,9 +26,10 @@ class GameWorld:
         self.river_paths = []
         self.river_flow = {}
         self.spatial_hash_grid = None
-        self.subtile_cache_filename = f"subtile_cache_level_{self.subdivision_level}.pkl"
+        self.subtile_cache_filename = f"subtile_cache_level_{self.subdivision_level}_v{cfg.SUBTILE_CACHE_VERSION}.pkl"
         self.subtile_cache = {}
         self.tile_centers = np.empty((0, 3), dtype=np.float32)
+        self.tile_center_radius_sq = np.empty(0, dtype=np.float32)
         self.pending_cache_save_count = 0
         self.subtile_executor = None
         self.subtile_futures = {}
@@ -180,7 +181,10 @@ class GameWorld:
         camera_distance = camera.get_distance_to_center()
         rotated_centers = camera.rotate_world_points(self.tile_centers)
         camera_space_z = rotated_centers[:, 2] - camera_distance
-        front_mask = camera_space_z < -0.05
+        safe_camera_distance = max(camera_distance, 1e-6)
+        horizon_z = self.tile_center_radius_sq / safe_camera_distance
+        surface_mask = rotated_centers[:, 2] >= horizon_z - cfg.SUBTILE_HORIZON_MARGIN
+        front_mask = (camera_space_z < -0.05) & surface_mask
         if not np.any(front_mask):
             return []
 
@@ -264,11 +268,24 @@ class GameWorld:
     def _build_tile_centers(self):
         if not self.tiles:
             self.tile_centers = np.empty((0, 3), dtype=np.float32)
+            self.tile_center_radius_sq = np.empty(0, dtype=np.float32)
             return
         self.tile_centers = np.array([tile.center for tile in self.tiles], dtype=np.float32)
+        self.tile_center_radius_sq = np.einsum("ij,ij->i", self.tile_centers, self.tile_centers).astype(np.float32)
 
     def _start_subtile_executor(self):
-        self.subtile_executor = ProcessPoolExecutor(max_workers=cfg.SUBTILE_BACKGROUND_WORKERS)
+        worker_count = self._get_subtile_worker_count()
+        print(f"Starting subtile executor with {worker_count} worker(s).")
+        self.subtile_executor = ProcessPoolExecutor(max_workers=worker_count)
+
+    def _get_subtile_worker_count(self):
+        if cfg.SUBTILE_BACKGROUND_WORKERS > 0:
+            return cfg.SUBTILE_BACKGROUND_WORKERS
+
+        cpu_count = os.cpu_count() or 1
+        reserved_cores = max(1, cfg.SUBTILE_RESERVED_CPU_CORES)
+        usable_cores = max(1, cpu_count - reserved_cores)
+        return max(1, min(usable_cores, cfg.SUBTILE_MAX_BACKGROUND_WORKERS))
 
     def _submit_subtile_task(self, tile):
         if self.subtile_executor is None:
