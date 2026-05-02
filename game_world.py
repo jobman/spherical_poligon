@@ -159,6 +159,7 @@ class GameWorld:
 
     def ensure_subtiles_generated(self, tiles):
         self._collect_completed_subtile_tasks()
+        submitted_tile_ids = set()
 
         for tile in tiles:
             if tile.subtiles:
@@ -167,13 +168,22 @@ class GameWorld:
             cached_subtiles = self.subtile_cache.get(tile.id)
             if cached_subtiles is not None:
                 tile.subtiles = self._deserialize_subtiles(cached_subtiles)
+                self._polish_tile_edges_with_generated_neighbors(tile)
                 continue
 
             if tile.id in self.subtile_futures:
                 continue
             if len(self.subtile_futures) >= cfg.SUBTILE_MAX_IN_FLIGHT_TASKS:
                 break
-            self._submit_subtile_task(tile)
+
+            forced_edge_points = self._get_neighbor_subtile_edge_points(tile)
+            if not forced_edge_points and (self.subtile_futures or submitted_tile_ids):
+                continue
+            if any(neighbor.id in self.subtile_futures or neighbor.id in submitted_tile_ids for neighbor in tile.neighbors):
+                continue
+
+            self._submit_subtile_task(tile, forced_edge_points)
+            submitted_tile_ids.add(tile.id)
 
     def get_visible_tiles_for_subtiles(self, camera, aspect_ratio, limit=cfg.SUBTILE_VISIBLE_TILE_LIMIT, screen_margin=cfg.SUBTILE_SCREEN_MARGIN):
         half_fov_y = math.radians(45.0) * 0.5
@@ -257,6 +267,7 @@ class GameWorld:
                     tile_id, serialized_subtiles = future.result()
                     self.subtile_cache[tile_id] = serialized_subtiles
                     self.tiles[tile_id].subtiles = self._deserialize_subtiles(serialized_subtiles)
+                    self._polish_tile_edges_with_generated_neighbors(self.tiles[tile_id])
                     self.pending_cache_save_count += 1
                 except Exception as exc:
                     print(f"Could not finish subtile task during shutdown: {exc}")
@@ -287,7 +298,7 @@ class GameWorld:
         usable_cores = max(1, cpu_count - reserved_cores)
         return max(1, min(usable_cores, cfg.SUBTILE_MAX_BACKGROUND_WORKERS))
 
-    def _submit_subtile_task(self, tile):
+    def _submit_subtile_task(self, tile, forced_edge_points=None):
         if self.subtile_executor is None:
             return
 
@@ -300,9 +311,82 @@ class GameWorld:
             cfg.SUBTILE_EDGE_POINT_SPACING_FACTOR,
             cfg.SUBTILE_MAX_INTERIOR_POINTS,
             cfg.SUBTILE_CANDIDATE_BATCH_SIZE,
-            cfg.SUBTILE_MAX_STAGNATION
+            cfg.SUBTILE_MAX_STAGNATION,
+            forced_edge_points or []
         )
         self.subtile_futures[tile.id] = future
+
+    def _get_neighbor_subtile_edge_points(self, tile):
+        forced_points = []
+        for neighbor in tile.neighbors:
+            if not neighbor.subtiles:
+                continue
+
+            shared_edge = self._get_shared_edge(tile, neighbor)
+            if shared_edge is None:
+                continue
+
+            edge_start, edge_end = shared_edge
+            forced_points.extend(
+                self._get_subtile_vertices_on_edge(neighbor, edge_start, edge_end)
+            )
+
+        return self._deduplicate_points(forced_points)
+
+    def _get_shared_edge(self, tile, neighbor):
+        common_vertices = [
+            vertex.to_np()
+            for vertex in tile.vertices
+            if vertex in neighbor.vertices
+        ]
+        if len(common_vertices) < 2:
+            return None
+
+        return common_vertices[0], common_vertices[1]
+
+    def _get_subtile_vertices_on_edge(self, tile, edge_start, edge_end):
+        points = []
+        edge_length_sq = float(np.dot(edge_end - edge_start, edge_end - edge_start))
+        if edge_length_sq <= 1e-16:
+            return points
+
+        endpoint_epsilon_sq = 1e-10
+        boundary_epsilon_sq = 1e-8
+        for subtile in tile.subtiles:
+            for vertex in subtile.vertices:
+                point = np.asarray(vertex, dtype=np.float32)
+                if self._point_segment_distance_sq(point, edge_start, edge_end) > boundary_epsilon_sq:
+                    continue
+                if (
+                    np.sum((point - edge_start) * (point - edge_start)) <= endpoint_epsilon_sq or
+                    np.sum((point - edge_end) * (point - edge_end)) <= endpoint_epsilon_sq
+                ):
+                    continue
+                points.append(point)
+
+        return points
+
+    def _deduplicate_points(self, points):
+        deduplicated = []
+        seen = set()
+        for point in points:
+            key = tuple(np.round(point, 7))
+            if key in seen:
+                continue
+            seen.add(key)
+            deduplicated.append(np.asarray(point, dtype=np.float32))
+        return deduplicated
+
+    def _point_segment_distance_sq(self, point, segment_start, segment_end):
+        segment = segment_end - segment_start
+        segment_length_sq = float(np.dot(segment, segment))
+        if segment_length_sq <= 1e-16:
+            return float(np.sum((point - segment_start) * (point - segment_start)))
+
+        t = float(np.dot(point - segment_start, segment) / segment_length_sq)
+        t = np.clip(t, 0.0, 1.0)
+        closest = segment_start + segment * t
+        return float(np.sum((point - closest) * (point - closest)))
 
     def _collect_completed_subtile_tasks(self):
         if not self.subtile_futures:
@@ -321,6 +405,7 @@ class GameWorld:
 
             self.subtile_cache[tile_id] = serialized_subtiles
             self.tiles[tile_id].subtiles = self._deserialize_subtiles(serialized_subtiles)
+            self._polish_tile_edges_with_generated_neighbors(self.tiles[tile_id])
             self.pending_cache_save_count += 1
 
         for tile_id in completed_tile_ids:
@@ -345,6 +430,162 @@ class GameWorld:
             )
             for polygon in serialized_subtiles
         ]
+
+    def _polish_tile_edges_with_generated_neighbors(self, tile):
+        if not tile.subtiles:
+            return
+
+        changed_tiles = set()
+        for neighbor in tile.neighbors:
+            if not neighbor.subtiles:
+                continue
+
+            shared_edge = self._get_shared_edge(tile, neighbor)
+            if shared_edge is None:
+                continue
+
+            if self._polish_shared_subtile_edge(tile, neighbor, shared_edge):
+                changed_tiles.add(tile)
+                changed_tiles.add(neighbor)
+
+        for changed_tile in changed_tiles:
+            changed_tile.subtile_version = getattr(changed_tile, "subtile_version", 0) + 1
+            self.subtile_cache[changed_tile.id] = self._serialize_subtiles(changed_tile.subtiles)
+            self.pending_cache_save_count += 1
+
+    def _polish_shared_subtile_edge(self, tile, neighbor, shared_edge):
+        edge_start, edge_end = shared_edge
+        edge_points = []
+        edge_points.extend(self._get_subtile_vertex_refs_on_edge(tile, edge_start, edge_end))
+        edge_points.extend(self._get_subtile_vertex_refs_on_edge(neighbor, edge_start, edge_end))
+        if len(edge_points) < 2:
+            return False
+
+        merge_distance = self._get_edge_polish_merge_distance(tile, neighbor)
+        if merge_distance <= 0:
+            return False
+
+        parent = list(range(len(edge_points)))
+        merge_distance_sq = merge_distance * merge_distance
+
+        def find(index):
+            while parent[index] != index:
+                parent[index] = parent[parent[index]]
+                index = parent[index]
+            return index
+
+        def union(left, right):
+            left_root = find(left)
+            right_root = find(right)
+            if left_root != right_root:
+                parent[right_root] = left_root
+
+        for left_index in range(len(edge_points)):
+            left_point = edge_points[left_index][3]
+            for right_index in range(left_index + 1, len(edge_points)):
+                right_point = edge_points[right_index][3]
+                if np.sum((left_point - right_point) * (left_point - right_point)) <= merge_distance_sq:
+                    union(left_index, right_index)
+
+        clusters = defaultdict(list)
+        for index, edge_point in enumerate(edge_points):
+            clusters[find(index)].append(edge_point)
+
+        changed = False
+        for cluster in clusters.values():
+            if len(cluster) < 2:
+                continue
+
+            representative = np.mean(np.asarray([item[3] for item in cluster], dtype=np.float64), axis=0).astype(np.float32)
+            representative = self._closest_point_on_segment(representative, edge_start, edge_end)
+            for _, subtile, vertex_index, point in cluster:
+                if np.sum((point - representative) * (point - representative)) <= 1e-14:
+                    continue
+                subtile.vertices[vertex_index] = representative.copy()
+                changed = True
+
+        if changed:
+            for changed_tile in (tile, neighbor):
+                for subtile in changed_tile.subtiles:
+                    subtile.vertices = self._clean_subtile_vertices(subtile.vertices)
+                changed_tile.subtiles = [
+                    subtile for subtile in changed_tile.subtiles
+                    if len(subtile.vertices) >= 3
+                ]
+
+        return changed
+
+    def _get_subtile_vertex_refs_on_edge(self, tile, edge_start, edge_end):
+        refs = []
+        endpoint_epsilon_sq = 1e-10
+        boundary_epsilon_sq = 1e-8
+        for subtile in tile.subtiles:
+            for vertex_index, vertex in enumerate(subtile.vertices):
+                point = np.asarray(vertex, dtype=np.float32)
+                if self._point_segment_distance_sq(point, edge_start, edge_end) > boundary_epsilon_sq:
+                    continue
+                if (
+                    np.sum((point - edge_start) * (point - edge_start)) <= endpoint_epsilon_sq or
+                    np.sum((point - edge_end) * (point - edge_end)) <= endpoint_epsilon_sq
+                ):
+                    continue
+                refs.append((tile, subtile, vertex_index, point))
+        return refs
+
+    def _get_edge_polish_merge_distance(self, tile, neighbor):
+        edge_spacing = (
+            self._get_tile_initial_edge_point_spacing(tile) +
+            self._get_tile_initial_edge_point_spacing(neighbor)
+        ) * 0.5
+        return edge_spacing * cfg.SUBTILE_EDGE_POLISH_MERGE_SPACING_FACTOR
+
+    def _get_tile_initial_edge_point_spacing(self, tile):
+        vertices = [vertex.to_np() for vertex in tile.vertices]
+        if len(vertices) < 2:
+            return 0.0
+
+        edge_lengths = [
+            np.linalg.norm(vertices[(index + 1) % len(vertices)] - vertices[index])
+            for index in range(len(vertices))
+        ]
+        average_edge_length = float(np.mean(edge_lengths))
+        min_distance = average_edge_length * cfg.SUBTILE_MIN_DISTANCE_FACTOR
+        return max(min_distance, average_edge_length * cfg.SUBTILE_EDGE_POINT_SPACING_FACTOR)
+
+    def _clean_subtile_vertices(self, vertices, distance_epsilon=1e-8, collinear_epsilon=1e-10):
+        cleaned = []
+        for vertex in vertices:
+            point = np.asarray(vertex, dtype=np.float32)
+            if cleaned and np.sum((point - cleaned[-1]) * (point - cleaned[-1])) <= distance_epsilon * distance_epsilon:
+                continue
+            cleaned.append(point)
+
+        if len(cleaned) > 1 and np.sum((cleaned[0] - cleaned[-1]) * (cleaned[0] - cleaned[-1])) <= distance_epsilon * distance_epsilon:
+            cleaned.pop()
+        if len(cleaned) < 3:
+            return cleaned
+
+        result = []
+        for index, point in enumerate(cleaned):
+            previous = cleaned[index - 1]
+            following = cleaned[(index + 1) % len(cleaned)]
+            edge_a = point - previous
+            edge_b = following - point
+            cross = np.linalg.norm(np.cross(edge_a, edge_b))
+            if cross <= collinear_epsilon and np.dot(edge_a, edge_b) >= 0:
+                continue
+            result.append(point)
+        return result
+
+    def _closest_point_on_segment(self, point, segment_start, segment_end):
+        segment = segment_end - segment_start
+        segment_length_sq = float(np.dot(segment, segment))
+        if segment_length_sq <= 1e-16:
+            return np.asarray(segment_start, dtype=np.float32)
+
+        t = float(np.dot(point - segment_start, segment) / segment_length_sq)
+        t = np.clip(t, 0.0, 1.0)
+        return np.asarray(segment_start + segment * t, dtype=np.float32)
 
     def _assign_terrain_and_heights(self):
         print("Assigning terrain and heights...")

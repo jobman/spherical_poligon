@@ -1,8 +1,15 @@
 import math
 import numpy as np
 from dataclasses import dataclass
+from collections import defaultdict
+import config as cfg
 from config import TerrainType
 from geometry import Vertex
+
+try:
+    from scipy.spatial import Voronoi
+except ImportError:
+    Voronoi = None
 
 @dataclass
 class SubTile:
@@ -17,7 +24,8 @@ def generate_serialized_subtiles_for_tile(
     edge_spacing_factor,
     max_interior_points,
     candidate_batch_size,
-    max_stagnation
+    max_stagnation,
+    forced_edge_points=None
 ):
     vertices = [Vertex(*coords) for coords in vertex_coords]
     tile = Tile(tile_id, vertices, np.asarray(normal, dtype=np.float32))
@@ -26,7 +34,8 @@ def generate_serialized_subtiles_for_tile(
         edge_spacing_factor=edge_spacing_factor,
         max_interior_points=max_interior_points,
         candidate_batch_size=candidate_batch_size,
-        max_stagnation=max_stagnation
+        max_stagnation=max_stagnation,
+        forced_edge_points=forced_edge_points
     )
     return tile_id, [
         [np.asarray(vertex, dtype=np.float32) for vertex in subtile.vertices]
@@ -80,7 +89,8 @@ class Tile:
         edge_spacing_factor=0.9,
         max_interior_points=18,
         candidate_batch_size=24,
-        max_stagnation=12
+        max_stagnation=12,
+        forced_edge_points=None
     ):
         vertex_count = len(self.vertices)
         if vertex_count < 3:
@@ -103,10 +113,22 @@ class Tile:
         for vertex in polygon_2d:
             seed_points.append(vertex.copy())
 
-        # Stage 2: place points only on tile edges.
-        seed_points.extend(self._generate_edge_points(polygon_2d, edge_spacing, min_distance))
+        # Stage 2: reuse already known subtile boundary vertices from generated neighbors.
+        seed_points.extend(
+            self._project_forced_edge_points_to_2d(
+                forced_edge_points,
+                basis_origin,
+                basis_u,
+                basis_v,
+                polygon_2d,
+                min_distance
+            )
+        )
 
-        # Stage 3: place points only inside the tile with a distance threshold.
+        # Stage 3: place points only on tile edges.
+        seed_points.extend(self._generate_edge_points(polygon_2d, edge_spacing, min_distance, seed_points))
+
+        # Stage 4: place points only inside the tile with a distance threshold.
         seed_points.extend(
             self._generate_interior_points(
                 polygon_2d,
@@ -118,14 +140,15 @@ class Tile:
             )
         )
 
-        subtiles = []
-        for point_index, seed in enumerate(seed_points):
-            cell = self._build_voronoi_cell(point_index, seed, seed_points, polygon_2d)
-            if len(cell) < 3:
-                continue
+        subtile_cells = self._build_voronoi_cells(seed_points, polygon_2d)
 
+        merge_distance = average_edge_length * cfg.SUBTILE_POLISH_MERGE_DISTANCE_FACTOR
+        subtile_cells = self._polish_subtile_cells(subtile_cells, polygon_2d, merge_distance)
+
+        subtiles = []
+        for cell, color in subtile_cells:
             polygon_3d = [basis_origin + basis_u * point[0] + basis_v * point[1] for point in cell]
-            subtiles.append(SubTile(polygon_3d, self._get_subtile_color(point_index)))
+            subtiles.append(SubTile(polygon_3d, color))
 
         self.subtiles = subtiles
 
@@ -152,9 +175,57 @@ class Tile:
 
         return polygon_2d, center, basis_u, basis_v
 
-    def _generate_edge_points(self, polygon_2d, edge_spacing, min_distance):
+    def _project_forced_edge_points_to_2d(
+        self,
+        forced_edge_points,
+        basis_origin,
+        basis_u,
+        basis_v,
+        polygon_2d,
+        min_distance
+    ):
+        if not forced_edge_points:
+            return []
+
+        forced_edge_vertices = {}
+        boundary_epsilon = 1e-6
+        for raw_point in forced_edge_points:
+            point_3d = np.asarray(raw_point, dtype=np.float32)
+            offset = point_3d - basis_origin
+            point_2d = np.array([np.dot(offset, basis_u), np.dot(offset, basis_v)], dtype=np.float32)
+            edge_location = self._find_polygon_boundary_location(point_2d, polygon_2d, boundary_epsilon)
+            if edge_location is None:
+                continue
+
+            edge_index, edge_t, closest_point = edge_location
+            if edge_t <= 1e-5 or edge_t >= 1.0 - 1e-5:
+                continue
+            forced_edge_vertices.setdefault(edge_index, []).append((edge_t, closest_point))
+
+        forced_seed_points = []
+        min_distance_to_vertex = min_distance * 0.45
+        for edge_index, edge_vertices in forced_edge_vertices.items():
+            edge_start = polygon_2d[edge_index]
+            edge_end = polygon_2d[(edge_index + 1) % len(polygon_2d)]
+            previous_seed = edge_start
+
+            for _, boundary_vertex in sorted(edge_vertices, key=lambda item: item[0]):
+                seed_point = boundary_vertex * 2.0 - previous_seed
+                if not self._is_point_on_segment_2d(seed_point, edge_start, edge_end):
+                    continue
+                previous_seed = seed_point
+                if not self._is_far_enough(seed_point, polygon_2d, min_distance_to_vertex):
+                    continue
+                if not self._is_far_enough(seed_point, forced_seed_points, min_distance * 0.25):
+                    continue
+                forced_seed_points.append(seed_point)
+
+        return forced_seed_points
+
+    def _generate_edge_points(self, polygon_2d, edge_spacing, min_distance, existing_points=None):
         edge_points = []
         vertex_count = len(polygon_2d)
+        blocked_points = list(existing_points) if existing_points is not None else list(polygon_2d)
 
         for i in range(vertex_count):
             start = polygon_2d[i]
@@ -165,10 +236,42 @@ class Tile:
             for step in range(1, segment_count):
                 t = step / segment_count
                 point = start * (1.0 - t) + end * t
-                if self._is_far_enough(point, polygon_2d + edge_points, min_distance * 0.98):
+                if self._is_far_enough(point, blocked_points + edge_points, min_distance * 0.98):
                     edge_points.append(point)
 
         return edge_points
+
+    def _is_on_polygon_boundary(self, point, polygon_2d, distance_epsilon=1e-6):
+        return self._find_polygon_boundary_location(point, polygon_2d, distance_epsilon) is not None
+
+    def _find_polygon_boundary_location(self, point, polygon_2d, distance_epsilon=1e-6):
+        for index in range(len(polygon_2d)):
+            start = polygon_2d[index]
+            end = polygon_2d[(index + 1) % len(polygon_2d)]
+            segment = end - start
+            segment_length_sq = float(np.dot(segment, segment))
+            if segment_length_sq <= 1e-16:
+                continue
+            t = float(np.dot(point - start, segment) / segment_length_sq)
+            t = np.clip(t, 0.0, 1.0)
+            closest = start + segment * t
+            if float(np.sum((point - closest) * (point - closest))) <= distance_epsilon * distance_epsilon:
+                return index, t, closest.astype(np.float32)
+        return None
+
+    def _is_point_on_segment_2d(self, point, segment_start, segment_end, distance_epsilon=1e-6):
+        return self._point_segment_distance_sq_2d(point, segment_start, segment_end) <= distance_epsilon * distance_epsilon
+
+    def _point_segment_distance_sq_2d(self, point, segment_start, segment_end):
+        segment = segment_end - segment_start
+        segment_length_sq = float(np.dot(segment, segment))
+        if segment_length_sq <= 1e-16:
+            return float(np.sum((point - segment_start) * (point - segment_start)))
+
+        t = float(np.dot(point - segment_start, segment) / segment_length_sq)
+        t = np.clip(t, 0.0, 1.0)
+        closest = segment_start + segment * t
+        return float(np.sum((point - closest) * (point - closest)))
 
     def _generate_interior_points(
         self,
@@ -257,6 +360,59 @@ class Tile:
 
         return self._clean_polygon_vertices(cell)
 
+    def _build_voronoi_cells(self, seed_points, boundary_polygon):
+        neighbor_indices = self._get_voronoi_neighbor_indices(seed_points)
+        if neighbor_indices is None:
+            return self._build_voronoi_cells_by_full_clipping(seed_points, boundary_polygon)
+
+        subtile_cells = []
+        for point_index, seed in enumerate(seed_points):
+            cell = [point.copy() for point in boundary_polygon]
+            for other_index in neighbor_indices[point_index]:
+                other = seed_points[other_index]
+                mid_point = (seed + other) * 0.5
+                normal = other - seed
+                cell = self._clip_polygon_with_half_plane(cell, mid_point, normal)
+                if len(cell) < 3:
+                    break
+
+            cell = self._clean_polygon_vertices(cell)
+            if len(cell) >= 3:
+                subtile_cells.append((cell, self._get_subtile_color(point_index)))
+
+        return subtile_cells
+
+    def _build_voronoi_cells_by_full_clipping(self, seed_points, boundary_polygon):
+        subtile_cells = []
+        for point_index, seed in enumerate(seed_points):
+            cell = self._build_voronoi_cell(point_index, seed, seed_points, boundary_polygon)
+            if len(cell) < 3:
+                continue
+
+            subtile_cells.append((cell, self._get_subtile_color(point_index)))
+
+        return subtile_cells
+
+    def _get_voronoi_neighbor_indices(self, seed_points):
+        if Voronoi is None or len(seed_points) < 4:
+            return None
+
+        points = np.asarray(seed_points, dtype=np.float64)
+        if points.ndim != 2 or points.shape[1] != 2 or not np.isfinite(points).all():
+            return None
+
+        try:
+            voronoi = Voronoi(points)
+        except Exception:
+            return None
+
+        neighbors = [set() for _ in range(len(seed_points))]
+        for point_a, point_b in voronoi.ridge_points:
+            neighbors[int(point_a)].add(int(point_b))
+            neighbors[int(point_b)].add(int(point_a))
+
+        return [sorted(indices) for indices in neighbors]
+
     def _clip_polygon_with_half_plane(self, polygon, line_point, line_normal):
         if not polygon:
             return []
@@ -313,6 +469,96 @@ class Tile:
             result.append(point)
 
         return result
+
+    def _polish_subtile_cells(self, subtile_cells, boundary_polygon, merge_distance):
+        if merge_distance <= 0 or not subtile_cells:
+            return subtile_cells
+
+        points = []
+        for cell, _ in subtile_cells:
+            points.extend(cell)
+        if not points:
+            return subtile_cells
+
+        parent = list(range(len(points)))
+        merge_distance_sq = merge_distance * merge_distance
+
+        def find(index):
+            while parent[index] != index:
+                parent[index] = parent[parent[index]]
+                index = parent[index]
+            return index
+
+        def union(left, right):
+            left_root = find(left)
+            right_root = find(right)
+            if left_root != right_root:
+                parent[right_root] = left_root
+
+        for left_index in range(len(points)):
+            left = points[left_index]
+            for right_index in range(left_index + 1, len(points)):
+                right = points[right_index]
+                if np.sum((left - right) * (left - right)) <= merge_distance_sq:
+                    union(left_index, right_index)
+
+        clusters = {}
+        for index, point in enumerate(points):
+            clusters.setdefault(find(index), []).append(point)
+
+        representatives = {}
+        for root, cluster_points in clusters.items():
+            representative = np.mean(np.asarray(cluster_points, dtype=np.float64), axis=0).astype(np.float32)
+            if any(self._is_on_polygon_boundary(point, boundary_polygon, merge_distance * 0.25) for point in cluster_points):
+                representative = self._nearest_polygon_boundary_point(representative, boundary_polygon)
+            representatives[root] = representative
+
+        polished_cells = []
+        point_index = 0
+        for cell, color in subtile_cells:
+            polished_cell = []
+            for _ in cell:
+                polished_cell.append(representatives[find(point_index)])
+                point_index += 1
+
+            polished_cell = self._clean_polygon_vertices(polished_cell)
+            if len(polished_cell) >= 3:
+                polished_cells.append((polished_cell, color))
+
+        return polished_cells
+
+    def _polygon_area_2d(self, polygon):
+        return abs(self._polygon_area_signed_2d(polygon))
+
+    def _polygon_area_signed_2d(self, polygon):
+        area = 0.0
+        for index, point in enumerate(polygon):
+            next_point = polygon[(index + 1) % len(polygon)]
+            area += float(point[0] * next_point[1] - next_point[0] * point[1])
+        return area * 0.5
+
+    def _nearest_polygon_boundary_point(self, point, polygon):
+        nearest_point = None
+        nearest_distance_sq = float("inf")
+        for index in range(len(polygon)):
+            start = polygon[index]
+            end = polygon[(index + 1) % len(polygon)]
+            candidate = self._closest_point_on_segment_2d(point, start, end)
+            distance_sq = float(np.sum((point - candidate) * (point - candidate)))
+            if distance_sq < nearest_distance_sq:
+                nearest_distance_sq = distance_sq
+                nearest_point = candidate
+        return np.asarray(nearest_point, dtype=np.float32)
+
+    def _closest_point_on_segment_2d(self, point, segment_start, segment_end):
+        segment = segment_end - segment_start
+        segment_length_sq = float(np.dot(segment, segment))
+        if segment_length_sq <= 1e-16:
+            return np.asarray(segment_start, dtype=np.float32)
+
+        t = float(np.dot(point - segment_start, segment) / segment_length_sq)
+        t = np.clip(t, 0.0, 1.0)
+        return np.asarray(segment_start + segment * t, dtype=np.float32)
 
     def _is_inside_half_plane(self, point, line_point, line_normal):
         return np.dot(point - line_point, line_normal) <= 1e-6

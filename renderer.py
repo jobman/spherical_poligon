@@ -263,7 +263,8 @@ class Renderer:
 
         cached_vbo = self.subtile_edge_vbos.get(tile.id)
         subtile_count = len(tile.subtiles)
-        if cached_vbo is not None and cached_vbo[2] == subtile_count:
+        subtile_version = getattr(tile, "subtile_version", 0)
+        if cached_vbo is not None and cached_vbo[2] == subtile_count and cached_vbo[3] == subtile_version:
             return cached_vbo[0], cached_vbo[1]
 
         edge_vertices = []
@@ -296,7 +297,7 @@ class Renderer:
         edge_vbo = cached_vbo[0] if cached_vbo is not None else glGenBuffers(1)
         glBindBuffer(GL_ARRAY_BUFFER, edge_vbo)
         glBufferData(GL_ARRAY_BUFFER, edge_array, GL_STATIC_DRAW)
-        self.subtile_edge_vbos[tile.id] = (edge_vbo, edge_count, subtile_count)
+        self.subtile_edge_vbos[tile.id] = (edge_vbo, edge_count, subtile_count, subtile_version)
         return edge_vbo, edge_count
 
     def _subtile_edge_key(self, start, end):
