@@ -51,6 +51,7 @@ class Renderer:
         self.river_vbo_verts = None
         self.river_vbo_colors = None
         self.subtile_edge_vbos = {}
+        self.subtile_point_vbos = {}
         
         self.tile_vert_count = 0
         self.tile_edge_count = 0
@@ -222,7 +223,8 @@ class Renderer:
             glEnable(GL_LIGHTING)
 
     def draw_subtiles(self):
-        if not self._should_render_subtiles():
+        should_render_subtiles = self._should_render_subtiles()
+        if not should_render_subtiles and not cfg.SUBTILE_DEBUG_DRAW_POINTS:
             return
 
         aspect_ratio = self.width / self.height if self.height else 1.0
@@ -230,26 +232,32 @@ class Renderer:
         if not visible_tiles:
             return
 
-        self.game_world.ensure_subtiles_generated(visible_tiles)
+        if should_render_subtiles:
+            self.game_world.ensure_subtiles_generated(visible_tiles)
+
         visible_subtile_vbos = [
             prepared_vbo
             for tile in visible_tiles
             if (prepared_vbo := self._get_subtile_edge_vbo(tile)) is not None
         ]
-        if not visible_subtile_vbos:
+        if not visible_subtile_vbos and not cfg.SUBTILE_DEBUG_DRAW_POINTS:
             return
 
         glDisable(GL_LIGHTING)
         glEnable(GL_DEPTH_TEST)
 
-        glColor3f(0.65, 0.65, 0.65)
-        glLineWidth(1.2)
-        glEnableClientState(GL_VERTEX_ARRAY)
-        for edge_vbo, edge_count in visible_subtile_vbos:
-            glBindBuffer(GL_ARRAY_BUFFER, edge_vbo)
-            glVertexPointer(3, GL_FLOAT, 0, None)
-            glDrawArrays(GL_LINES, 0, edge_count)
-        glDisableClientState(GL_VERTEX_ARRAY)
+        if visible_subtile_vbos:
+            glColor3f(0.65, 0.65, 0.65)
+            glLineWidth(1.2)
+            glEnableClientState(GL_VERTEX_ARRAY)
+            for edge_vbo, edge_count in visible_subtile_vbos:
+                glBindBuffer(GL_ARRAY_BUFFER, edge_vbo)
+                glVertexPointer(3, GL_FLOAT, 0, None)
+                glDrawArrays(GL_LINES, 0, edge_count)
+            glDisableClientState(GL_VERTEX_ARRAY)
+
+        if cfg.SUBTILE_DEBUG_DRAW_POINTS:
+            self._draw_subtile_debug_points(visible_tiles)
 
         glEnable(GL_LIGHTING)
 
@@ -299,6 +307,67 @@ class Renderer:
         glBufferData(GL_ARRAY_BUFFER, edge_array, GL_STATIC_DRAW)
         self.subtile_edge_vbos[tile.id] = (edge_vbo, edge_count, subtile_count, subtile_version)
         return edge_vbo, edge_count
+
+    def _draw_subtile_debug_points(self, visible_tiles):
+        visible_point_vbos = [
+            prepared_vbo
+            for tile in visible_tiles
+            if (prepared_vbo := self._get_subtile_point_vbo(tile)) is not None
+        ]
+        if not visible_point_vbos:
+            return
+
+        point_color = np.asarray(cfg.SUBTILE_DEBUG_POINT_COLOR, dtype=np.float32) / 255.0
+        glColor3f(float(point_color[0]), float(point_color[1]), float(point_color[2]))
+        glPointSize(float(cfg.SUBTILE_DEBUG_POINT_SIZE))
+        glEnableClientState(GL_VERTEX_ARRAY)
+        for point_vbo, point_count in visible_point_vbos:
+            glBindBuffer(GL_ARRAY_BUFFER, point_vbo)
+            glVertexPointer(3, GL_FLOAT, 0, None)
+            glDrawArrays(GL_POINTS, 0, point_count)
+        glDisableClientState(GL_VERTEX_ARRAY)
+        glPointSize(1.0)
+
+    def _get_subtile_point_vbo(self, tile):
+        if not tile.subtiles:
+            return None
+
+        cached_vbo = self.subtile_point_vbos.get(tile.id)
+        point_source = getattr(tile, "subtile_seed_points", [])
+        if not point_source:
+            return None
+
+        subtile_count = len(tile.subtiles)
+        seed_count = len(point_source)
+        subtile_version = getattr(tile, "subtile_version", 0)
+        if (
+            cached_vbo is not None and
+            cached_vbo[2] == subtile_count and
+            cached_vbo[3] == subtile_version and
+            cached_vbo[4] == seed_count
+        ):
+            return cached_vbo[0], cached_vbo[1]
+
+        point_vertices = []
+        seen_points = set()
+        for raw_point in point_source:
+            point = raw_point * 1.003
+            key = tuple(np.round(point, 6))
+            if key in seen_points:
+                continue
+            seen_points.add(key)
+            point_vertices.append(point)
+
+        point_array = np.array(point_vertices, dtype=np.float32)
+        point_count = len(point_array)
+        if point_count == 0:
+            return None
+
+        point_vbo = cached_vbo[0] if cached_vbo is not None else glGenBuffers(1)
+        glBindBuffer(GL_ARRAY_BUFFER, point_vbo)
+        glBufferData(GL_ARRAY_BUFFER, point_array, GL_STATIC_DRAW)
+        self.subtile_point_vbos[tile.id] = (point_vbo, point_count, subtile_count, subtile_version, seed_count)
+        return point_vbo, point_count
 
     def _subtile_edge_key(self, start, end):
         a = tuple(np.round(start, 6))

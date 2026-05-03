@@ -37,10 +37,16 @@ def generate_serialized_subtiles_for_tile(
         max_stagnation=max_stagnation,
         forced_edge_points=forced_edge_points
     )
-    return tile_id, [
-        [np.asarray(vertex, dtype=np.float32) for vertex in subtile.vertices]
-        for subtile in tile.subtiles
-    ]
+    return tile_id, {
+        "subtiles": [
+            [np.asarray(vertex, dtype=np.float32) for vertex in subtile.vertices]
+            for subtile in tile.subtiles
+        ],
+        "seed_points": [
+            np.asarray(point, dtype=np.float32)
+            for point in tile.subtile_seed_points
+        ],
+    }
 
 class Tile:
     def __init__(self, id, vertices, normal):
@@ -54,6 +60,7 @@ class Tile:
         self.is_selected = False
         self.unit = None
         self.subtiles = []
+        self.subtile_seed_points = []
 
     def __getstate__(self):
         state = self.__dict__.copy()
@@ -62,6 +69,8 @@ class Tile:
             del state['neighbors']
         if 'subtiles' in state:
             del state['subtiles']
+        if 'subtile_seed_points' in state:
+            del state['subtile_seed_points']
         return state
 
     def __setstate__(self, state):
@@ -70,6 +79,7 @@ class Tile:
         self.unit = None
         self.is_selected = False
         self.subtiles = []
+        self.subtile_seed_points = []
         self._center = np.mean([v.to_np() for v in self.vertices], axis=0).astype(np.float32)
 
     def is_water(self):
@@ -95,6 +105,7 @@ class Tile:
         vertex_count = len(self.vertices)
         if vertex_count < 3:
             self.subtiles = []
+            self.subtile_seed_points = []
             return
 
         polygon_2d, basis_origin, basis_u, basis_v = self._project_polygon_to_2d()
@@ -105,39 +116,42 @@ class Tile:
         average_edge_length = float(np.mean(edge_lengths))
 
         min_distance = average_edge_length * min_distance_factor
-        edge_spacing = max(min_distance, average_edge_length * edge_spacing_factor)
-
         seed_points = []
+        seed_display_points = []
 
         # Stage 1: place points on the tile vertices.
-        for vertex in polygon_2d:
+        for vertex_index, vertex in enumerate(polygon_2d):
             seed_points.append(vertex.copy())
+            seed_display_points.append(self.vertices[vertex_index].to_np().copy())
 
-        # Stage 2: reuse already known subtile boundary vertices from generated neighbors.
-        seed_points.extend(
-            self._project_forced_edge_points_to_2d(
-                forced_edge_points,
-                basis_origin,
-                basis_u,
-                basis_v,
-                polygon_2d,
-                min_distance
-            )
+        # Stage 2: place canonical points on tile edges. These are derived from
+        # the real 3D edge, so adjacent tiles get identical boundary seeds.
+        edge_seed_points, edge_seed_display_points = self._generate_canonical_edge_points(
+            polygon_2d,
+            basis_origin,
+            basis_u,
+            basis_v,
+            edge_spacing_factor,
+            min_distance_factor,
+            min_distance,
+            seed_points
         )
+        seed_points.extend(edge_seed_points)
+        seed_display_points.extend(edge_seed_display_points)
 
-        # Stage 3: place points only on tile edges.
-        seed_points.extend(self._generate_edge_points(polygon_2d, edge_spacing, min_distance, seed_points))
-
-        # Stage 4: place points only inside the tile with a distance threshold.
-        seed_points.extend(
-            self._generate_interior_points(
-                polygon_2d,
-                seed_points,
-                min_distance,
-                max_interior_points,
-                candidate_batch_size,
-                max_stagnation
-            )
+        # Stage 3: place points only inside the tile with a distance threshold.
+        interior_seed_points = self._generate_interior_points(
+            polygon_2d,
+            seed_points,
+            min_distance,
+            max_interior_points,
+            candidate_batch_size,
+            max_stagnation
+        )
+        seed_points.extend(interior_seed_points)
+        seed_display_points.extend(
+            basis_origin + basis_u * point[0] + basis_v * point[1]
+            for point in interior_seed_points
         )
 
         subtile_cells = self._build_voronoi_cells(seed_points, polygon_2d)
@@ -147,10 +161,14 @@ class Tile:
 
         subtiles = []
         for cell, color in subtile_cells:
-            polygon_3d = [basis_origin + basis_u * point[0] + basis_v * point[1] for point in cell]
+            polygon_3d = [
+                self._polygon_point_to_3d(point, polygon_2d, basis_origin, basis_u, basis_v)
+                for point in cell
+            ]
             subtiles.append(SubTile(polygon_3d, color))
 
         self.subtiles = subtiles
+        self.subtile_seed_points = seed_display_points
 
     def _project_polygon_to_2d(self):
         center = self.center
@@ -174,6 +192,62 @@ class Tile:
             polygon_2d.append(np.array([np.dot(offset, basis_u), np.dot(offset, basis_v)], dtype=np.float32))
 
         return polygon_2d, center, basis_u, basis_v
+
+    def _project_point_to_2d(self, point_3d, basis_origin, basis_u, basis_v):
+        offset = np.asarray(point_3d, dtype=np.float32) - basis_origin
+        return np.array([np.dot(offset, basis_u), np.dot(offset, basis_v)], dtype=np.float32)
+
+    def _polygon_point_to_3d(self, point_2d, polygon_2d, basis_origin, basis_u, basis_v):
+        edge_location = self._find_polygon_boundary_location(point_2d, polygon_2d, distance_epsilon=1e-5)
+        if edge_location is not None:
+            edge_index, edge_t, _ = edge_location
+            start_3d = self.vertices[edge_index].to_np()
+            end_3d = self.vertices[(edge_index + 1) % len(self.vertices)].to_np()
+            return np.asarray(start_3d * (1.0 - edge_t) + end_3d * edge_t, dtype=np.float32)
+
+        return np.asarray(basis_origin + basis_u * point_2d[0] + basis_v * point_2d[1], dtype=np.float32)
+
+    def _generate_canonical_edge_points(
+        self,
+        polygon_2d,
+        basis_origin,
+        basis_u,
+        basis_v,
+        edge_spacing_factor,
+        min_distance_factor,
+        min_distance,
+        existing_points
+    ):
+        edge_points = []
+        edge_display_points = []
+        blocked_points = list(existing_points)
+        vertex_count = len(self.vertices)
+
+        for edge_index in range(vertex_count):
+            start_3d = self.vertices[edge_index].to_np()
+            end_3d = self.vertices[(edge_index + 1) % vertex_count].to_np()
+            edge_length = float(np.linalg.norm(end_3d - start_3d))
+            if edge_length <= 1e-8:
+                continue
+
+            edge_spacing = max(
+                edge_length * min_distance_factor,
+                edge_length * edge_spacing_factor
+            )
+            segment_count = max(1, int(np.floor(edge_length / edge_spacing)))
+            edge_start_2d = polygon_2d[edge_index]
+            edge_end_2d = polygon_2d[(edge_index + 1) % vertex_count]
+
+            for step in range(1, segment_count):
+                t = step / segment_count
+                point_3d = start_3d * (1.0 - t) + end_3d * t
+                point_2d = self._project_point_to_2d(point_3d, basis_origin, basis_u, basis_v)
+                point_2d = self._closest_point_on_segment_2d(point_2d, edge_start_2d, edge_end_2d)
+                if self._is_far_enough(point_2d, blocked_points + edge_points, min_distance * 0.98):
+                    edge_points.append(point_2d)
+                    edge_display_points.append(np.asarray(point_3d, dtype=np.float32))
+
+        return edge_points, edge_display_points
 
     def _project_forced_edge_points_to_2d(
         self,

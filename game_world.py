@@ -167,7 +167,7 @@ class GameWorld:
 
             cached_subtiles = self.subtile_cache.get(tile.id)
             if cached_subtiles is not None:
-                tile.subtiles = self._deserialize_subtiles(cached_subtiles)
+                self._apply_serialized_subtiles(tile, cached_subtiles)
                 self._polish_tile_edges_with_generated_neighbors(tile)
                 continue
 
@@ -176,13 +176,10 @@ class GameWorld:
             if len(self.subtile_futures) >= cfg.SUBTILE_MAX_IN_FLIGHT_TASKS:
                 break
 
-            forced_edge_points = self._get_neighbor_subtile_edge_points(tile)
-            if not forced_edge_points and (self.subtile_futures or submitted_tile_ids):
-                continue
             if any(neighbor.id in self.subtile_futures or neighbor.id in submitted_tile_ids for neighbor in tile.neighbors):
                 continue
 
-            self._submit_subtile_task(tile, forced_edge_points)
+            self._submit_subtile_task(tile)
             submitted_tile_ids.add(tile.id)
 
     def get_visible_tiles_for_subtiles(self, camera, aspect_ratio, limit=cfg.SUBTILE_VISIBLE_TILE_LIMIT, screen_margin=cfg.SUBTILE_SCREEN_MARGIN):
@@ -266,7 +263,7 @@ class GameWorld:
                 try:
                     tile_id, serialized_subtiles = future.result()
                     self.subtile_cache[tile_id] = serialized_subtiles
-                    self.tiles[tile_id].subtiles = self._deserialize_subtiles(serialized_subtiles)
+                    self._apply_serialized_subtiles(self.tiles[tile_id], serialized_subtiles)
                     self._polish_tile_edges_with_generated_neighbors(self.tiles[tile_id])
                     self.pending_cache_save_count += 1
                 except Exception as exc:
@@ -312,7 +309,7 @@ class GameWorld:
             cfg.SUBTILE_MAX_INTERIOR_POINTS,
             cfg.SUBTILE_CANDIDATE_BATCH_SIZE,
             cfg.SUBTILE_MAX_STAGNATION,
-            forced_edge_points or []
+            []
         )
         self.subtile_futures[tile.id] = future
 
@@ -404,31 +401,65 @@ class GameWorld:
                 continue
 
             self.subtile_cache[tile_id] = serialized_subtiles
-            self.tiles[tile_id].subtiles = self._deserialize_subtiles(serialized_subtiles)
+            self._apply_serialized_subtiles(self.tiles[tile_id], serialized_subtiles)
             self._polish_tile_edges_with_generated_neighbors(self.tiles[tile_id])
             self.pending_cache_save_count += 1
 
         for tile_id in completed_tile_ids:
             self.subtile_futures.pop(tile_id, None)
 
-    def _serialize_subtiles(self, subtiles):
-        serialized = []
-        for subtile in subtiles:
-            serialized.append([
-                np.asarray(vertex, dtype=np.float32)
-                for vertex in subtile.vertices
-            ])
-        return serialized
+    def _serialize_subtiles(self, tile_or_subtiles):
+        if hasattr(tile_or_subtiles, "subtiles"):
+            subtiles = tile_or_subtiles.subtiles
+            seed_points = getattr(tile_or_subtiles, "subtile_seed_points", [])
+        else:
+            subtiles = tile_or_subtiles
+            seed_points = []
+
+        return {
+            "subtiles": [
+                [
+                    np.asarray(vertex, dtype=np.float32)
+                    for vertex in subtile.vertices
+                ]
+                for subtile in subtiles
+            ],
+            "seed_points": [
+                np.asarray(point, dtype=np.float32)
+                for point in seed_points
+            ],
+        }
+
+    def _apply_serialized_subtiles(self, tile, serialized_subtiles):
+        tile.subtiles = self._deserialize_subtiles(serialized_subtiles)
+        tile.subtile_seed_points = self._deserialize_subtile_seed_points(serialized_subtiles)
+
+    def _get_serialized_subtile_polygons(self, serialized_subtiles):
+        if isinstance(serialized_subtiles, dict):
+            return serialized_subtiles.get("subtiles", [])
+        return serialized_subtiles
+
+    def _deserialize_subtile_seed_points(self, serialized_subtiles):
+        if not isinstance(serialized_subtiles, dict):
+            return []
+
+        return [
+            np.asarray(point, dtype=np.float32)
+            for point in serialized_subtiles.get("seed_points", [])
+        ]
 
     def _deserialize_subtiles(self, serialized_subtiles):
         from tile import SubTile
 
         return [
             SubTile(
-                vertices=[np.asarray(vertex, dtype=np.float32) for vertex in polygon],
+                vertices=[
+                    np.asarray(vertex, dtype=np.float32)
+                    for vertex in polygon
+                ],
                 color=np.array([0, 0, 0], dtype=np.float32)
             )
-            for polygon in serialized_subtiles
+            for polygon in self._get_serialized_subtile_polygons(serialized_subtiles)
         ]
 
     def _polish_tile_edges_with_generated_neighbors(self, tile):
@@ -436,6 +467,20 @@ class GameWorld:
             return
 
         changed_tiles = set()
+        if cfg.SUBTILE_REGENERATE_MISMATCHED_EDGES:
+            for neighbor in tile.neighbors:
+                if not neighbor.subtiles:
+                    continue
+
+                shared_edge = self._get_shared_edge(tile, neighbor)
+                if shared_edge is None:
+                    continue
+
+                if self._shared_subtile_edge_is_mismatched(tile, neighbor, shared_edge):
+                    self._regenerate_tile_subtiles_from_generated_neighbors(tile)
+                    changed_tiles.add(tile)
+                    break
+
         for neighbor in tile.neighbors:
             if not neighbor.subtiles:
                 continue
@@ -450,8 +495,66 @@ class GameWorld:
 
         for changed_tile in changed_tiles:
             changed_tile.subtile_version = getattr(changed_tile, "subtile_version", 0) + 1
-            self.subtile_cache[changed_tile.id] = self._serialize_subtiles(changed_tile.subtiles)
+            self.subtile_cache[changed_tile.id] = self._serialize_subtiles(changed_tile)
             self.pending_cache_save_count += 1
+
+    def _regenerate_tile_subtiles_from_generated_neighbors(self, tile):
+        forced_edge_points = self._get_neighbor_subtile_edge_points(tile)
+        if not forced_edge_points:
+            return
+
+        tile.generate_subtiles(
+            min_distance_factor=cfg.SUBTILE_MIN_DISTANCE_FACTOR,
+            edge_spacing_factor=cfg.SUBTILE_EDGE_POINT_SPACING_FACTOR,
+            max_interior_points=cfg.SUBTILE_MAX_INTERIOR_POINTS,
+            candidate_batch_size=cfg.SUBTILE_CANDIDATE_BATCH_SIZE,
+            max_stagnation=cfg.SUBTILE_MAX_STAGNATION,
+            forced_edge_points=forced_edge_points
+        )
+        tile.subtile_version = getattr(tile, "subtile_version", 0) + 1
+        self.subtile_cache[tile.id] = self._serialize_subtiles(tile)
+        self.pending_cache_save_count += 1
+
+    def _shared_subtile_edge_is_mismatched(self, tile, neighbor, shared_edge):
+        edge_start, edge_end = shared_edge
+        tile_points = self._get_unique_subtile_points_on_edge(tile, edge_start, edge_end)
+        neighbor_points = self._get_unique_subtile_points_on_edge(neighbor, edge_start, edge_end)
+
+        if not tile_points and not neighbor_points:
+            return False
+        if len(tile_points) != len(neighbor_points):
+            return True
+
+        merge_distance = self._get_edge_polish_merge_distance(tile, neighbor)
+        if merge_distance <= 0:
+            return False
+
+        edge_vector = edge_end - edge_start
+        edge_length_sq = float(np.dot(edge_vector, edge_vector))
+        if edge_length_sq <= 1e-16:
+            return False
+
+        def sort_key(point):
+            return float(np.dot(point - edge_start, edge_vector) / edge_length_sq)
+
+        tile_points = sorted(tile_points, key=sort_key)
+        neighbor_points = sorted(neighbor_points, key=sort_key)
+        merge_distance_sq = merge_distance * merge_distance
+        return any(
+            np.sum((left - right) * (left - right)) > merge_distance_sq
+            for left, right in zip(tile_points, neighbor_points)
+        )
+
+    def _get_unique_subtile_points_on_edge(self, tile, edge_start, edge_end):
+        points = []
+        seen = set()
+        for point in self._get_subtile_vertices_on_edge(tile, edge_start, edge_end):
+            key = tuple(np.round(point, 7))
+            if key in seen:
+                continue
+            seen.add(key)
+            points.append(point)
+        return points
 
     def _polish_shared_subtile_edge(self, tile, neighbor, shared_edge):
         edge_start, edge_end = shared_edge
