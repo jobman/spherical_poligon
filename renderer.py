@@ -1,6 +1,7 @@
 import pygame
 from pygame.locals import *
 import math
+import time
 import numpy as np
 import config as cfg
 from OpenGL.GL import *
@@ -58,6 +59,8 @@ class Renderer:
         self.river_vert_count = 0
 
         self.prepare_vbos(render_data)
+        if cfg.SUBTILE_PREPARE_ALL_VBOS_ON_START:
+            self.prepare_all_subtile_vbos()
         self.load_model("unit", "assets/textured_primal_warior/textured_primal_warior.obj")
 
     def load_model(self, name, file_path):
@@ -109,6 +112,38 @@ class Renderer:
             self.river_vbo_colors = glGenBuffers(1)
             glBindBuffer(GL_ARRAY_BUFFER, self.river_vbo_colors)
             glBufferData(GL_ARRAY_BUFFER, render_data.river_colors, GL_STATIC_DRAW)
+
+    def prepare_all_subtile_vbos(self):
+        start_time = time.perf_counter()
+        tiles_with_subtiles = [tile for tile in self.game_world.tiles if tile.subtiles]
+        total_tiles = len(tiles_with_subtiles)
+        if total_tiles == 0:
+            print("Subtile VBO prebuild skipped: no generated subtiles are loaded.")
+            return
+
+        print(f"Prebuilding subtile edge VBOs for {total_tiles} tiles...")
+        prepared_count = 0
+        edge_vertex_count = 0
+        progress_step = max(1, int(cfg.SUBTILE_PREPARE_VBO_PROGRESS_STEP))
+        for tile in tiles_with_subtiles:
+            prepared_vbo = self._get_subtile_edge_vbo(tile)
+            if prepared_vbo is not None:
+                _, edge_count = prepared_vbo
+                edge_vertex_count += edge_count
+            prepared_count += 1
+
+            if prepared_count % progress_step == 0 or prepared_count == total_tiles:
+                elapsed = time.perf_counter() - start_time
+                print(
+                    f"Subtile VBO prebuild: {prepared_count}/{total_tiles} tiles, "
+                    f"{edge_vertex_count} edge vertices in {elapsed:.2f}s."
+                )
+
+        elapsed = time.perf_counter() - start_time
+        print(
+            f"Subtile VBO prebuild complete: {prepared_count} tiles, "
+            f"{edge_vertex_count} edge vertices, total time {elapsed:.2f}s."
+        )
 
     def run_frame(self):
         running = self.input_handler.handle_events(pygame.event.get())
@@ -262,6 +297,9 @@ class Renderer:
         glEnable(GL_LIGHTING)
 
     def _should_render_subtiles(self):
+        if cfg.SUBTILE_RENDER_ALWAYS:
+            return True
+
         reveal_zoom = cfg.MIN_ZOOM + cfg.SUBTILE_VISIBILITY_MARGIN
         return self.camera.zoom <= reveal_zoom
 

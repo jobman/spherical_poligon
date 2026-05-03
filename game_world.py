@@ -1,12 +1,13 @@
 import math
 from collections import defaultdict
 import numpy as np
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from geometry import Vertex
 from tile import Tile, generate_serialized_subtiles_for_tile
 from config import TerrainType
 import pickle
 import os
+import time
 from perlin_noise import PerlinNoise
 from river_generator import RiverGenerator
 import config as cfg
@@ -66,6 +67,8 @@ class GameWorld:
 
         self._load_subtile_cache()
         self._build_tile_centers()
+        if cfg.SUBTILE_PRECOMPUTE_ALL_ON_START:
+            self.precompute_all_subtiles()
         self._start_subtile_executor()
 
         print(f"World created with {len(self.tiles)} tiles.")
@@ -156,6 +159,91 @@ class GameWorld:
         print(f"Generating rivers...")
         river_gen = RiverGenerator(self.vertices, self.vert_to_tiles, self.vert_neighbors)
         return river_gen.generate_rivers(num_rivers)
+
+    def precompute_all_subtiles(self):
+        start_time = time.perf_counter()
+        print(f"Precomputing subtiles for {len(self.tiles)} tiles...")
+
+        loaded_from_cache = 0
+        missing_tiles = []
+        for tile in self.tiles:
+            cached_subtiles = self.subtile_cache.get(tile.id)
+            if cached_subtiles is None:
+                missing_tiles.append(tile)
+                continue
+
+            if not tile.subtiles:
+                self._apply_serialized_subtiles(tile, cached_subtiles)
+            loaded_from_cache += 1
+
+        if not missing_tiles:
+            elapsed = time.perf_counter() - start_time
+            print(
+                f"Subtile precompute complete: all {loaded_from_cache} tiles loaded from cache "
+                f"in {elapsed:.2f}s."
+            )
+            return
+
+        completed_count = 0
+        failed_count = 0
+        progress_step = max(1, int(cfg.SUBTILE_PRECOMPUTE_PROGRESS_STEP))
+        worker_count = self._get_subtile_precompute_worker_count(len(missing_tiles))
+        print(f"Generating {len(missing_tiles)} missing subtile sets with {worker_count} worker(s).")
+        with ProcessPoolExecutor(max_workers=worker_count) as executor:
+            futures = {
+                executor.submit(
+                    generate_serialized_subtiles_for_tile,
+                    tile.id,
+                    [vertex.to_np() for vertex in tile.vertices],
+                    tile.normal,
+                    cfg.SUBTILE_MIN_DISTANCE_FACTOR,
+                    cfg.SUBTILE_EDGE_POINT_SPACING_FACTOR,
+                    cfg.SUBTILE_MAX_INTERIOR_POINTS,
+                    cfg.SUBTILE_CANDIDATE_BATCH_SIZE,
+                    cfg.SUBTILE_MAX_STAGNATION,
+                    []
+                ): tile
+                for tile in missing_tiles
+            }
+
+            for future in as_completed(futures):
+                tile = futures[future]
+                try:
+                    tile_id, serialized_subtiles = future.result()
+                except Exception as exc:
+                    failed_count += 1
+                    print(f"Could not precompute subtiles for tile {tile.id}: {exc}")
+                    continue
+
+                self.subtile_cache[tile_id] = serialized_subtiles
+                self._apply_serialized_subtiles(self.tiles[tile_id], serialized_subtiles)
+                completed_count += 1
+
+                if completed_count % progress_step == 0 or completed_count == len(missing_tiles):
+                    elapsed = time.perf_counter() - start_time
+                    total_ready = loaded_from_cache + completed_count
+                    print(
+                        f"Subtile precompute: {total_ready}/{len(self.tiles)} ready "
+                        f"({completed_count}/{len(missing_tiles)} generated) in {elapsed:.2f}s."
+                    )
+
+        self._save_subtile_cache()
+        self.pending_cache_save_count = 0
+
+        elapsed = time.perf_counter() - start_time
+        print(
+            f"Subtile precompute complete: {loaded_from_cache} loaded, "
+            f"{completed_count} generated, {failed_count} failed, total time {elapsed:.2f}s."
+        )
+
+    def _get_subtile_precompute_worker_count(self, task_count):
+        if cfg.SUBTILE_PRECOMPUTE_WORKERS > 0:
+            return max(1, min(int(cfg.SUBTILE_PRECOMPUTE_WORKERS), task_count))
+
+        cpu_count = os.cpu_count() or 1
+        reserved_cores = max(1, cfg.SUBTILE_RESERVED_CPU_CORES)
+        usable_cores = max(1, cpu_count - reserved_cores)
+        return max(1, min(usable_cores, task_count))
 
     def ensure_subtiles_generated(self, tiles):
         self._collect_completed_subtile_tasks()
