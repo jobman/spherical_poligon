@@ -271,25 +271,30 @@ class Renderer:
             self.game_world.ensure_subtiles_generated(visible_tiles)
 
         visible_subtile_vbos = [
-            prepared_vbo
+            (tile, prepared_vbo)
             for tile in visible_tiles
             if (prepared_vbo := self._get_subtile_edge_vbo(tile)) is not None
         ]
-        if not visible_subtile_vbos and not cfg.SUBTILE_DEBUG_DRAW_POINTS:
+        subtile_alpha = self._get_subtile_edge_alpha()
+        if (not visible_subtile_vbos or subtile_alpha <= 0.0) and not cfg.SUBTILE_DEBUG_DRAW_POINTS:
             return
 
         glDisable(GL_LIGHTING)
         glEnable(GL_DEPTH_TEST)
 
-        if visible_subtile_vbos:
-            glColor3f(0.65, 0.65, 0.65)
+        if visible_subtile_vbos and subtile_alpha > 0.0:
             glLineWidth(1.2)
+            glEnable(GL_BLEND)
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
             glEnableClientState(GL_VERTEX_ARRAY)
-            for edge_vbo, edge_count in visible_subtile_vbos:
+            for tile, (edge_vbo, edge_count) in visible_subtile_vbos:
+                edge_color = self._get_subtile_edge_color(tile)
+                glColor4f(float(edge_color[0]), float(edge_color[1]), float(edge_color[2]), float(subtile_alpha))
                 glBindBuffer(GL_ARRAY_BUFFER, edge_vbo)
                 glVertexPointer(3, GL_FLOAT, 0, None)
                 glDrawArrays(GL_LINES, 0, edge_count)
             glDisableClientState(GL_VERTEX_ARRAY)
+            glDisable(GL_BLEND)
 
         if cfg.SUBTILE_DEBUG_DRAW_POINTS:
             self._draw_subtile_debug_points(visible_tiles)
@@ -302,6 +307,22 @@ class Renderer:
 
         reveal_zoom = cfg.MIN_ZOOM + cfg.SUBTILE_VISIBILITY_MARGIN
         return self.camera.zoom <= reveal_zoom
+
+    def _get_subtile_edge_alpha(self):
+        zoom_range = cfg.MAX_ZOOM - cfg.MIN_ZOOM
+        if zoom_range <= 1e-8:
+            return 1.0
+
+        zoom_t = (self.camera.zoom - cfg.MIN_ZOOM) / zoom_range
+        fade_start = float(np.clip(cfg.SUBTILE_FADE_START_FRACTION, 0.0, 1.0))
+        fade_end = float(np.clip(cfg.SUBTILE_FADE_END_FRACTION, fade_start + 1e-6, 1.0))
+        if zoom_t <= fade_start:
+            return 1.0
+        if zoom_t >= fade_end:
+            return 0.0
+
+        fade_t = (zoom_t - fade_start) / (fade_end - fade_start)
+        return float(1.0 - fade_t)
 
     def _get_subtile_edge_vbo(self, tile):
         if not tile.subtiles:
@@ -345,6 +366,11 @@ class Renderer:
         glBufferData(GL_ARRAY_BUFFER, edge_array, GL_STATIC_DRAW)
         self.subtile_edge_vbos[tile.id] = (edge_vbo, edge_count, subtile_count, subtile_version)
         return edge_vbo, edge_count
+
+    def _get_subtile_edge_color(self, tile):
+        base_color = np.asarray(tile.color, dtype=np.float32) / 255.0
+        darken_factor = float(np.clip(cfg.SUBTILE_EDGE_COLOR_DARKEN_FACTOR, 0.0, 1.0))
+        return np.clip(base_color * darken_factor, 0.0, 1.0)
 
     def _draw_subtile_debug_points(self, visible_tiles):
         visible_point_vbos = [
