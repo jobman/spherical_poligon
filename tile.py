@@ -201,11 +201,40 @@ class Tile:
         edge_location = self._find_polygon_boundary_location(point_2d, polygon_2d, distance_epsilon=1e-5)
         if edge_location is not None:
             edge_index, edge_t, _ = edge_location
-            start_3d = self.vertices[edge_index].to_np()
-            end_3d = self.vertices[(edge_index + 1) % len(self.vertices)].to_np()
-            return np.asarray(start_3d * (1.0 - edge_t) + end_3d * edge_t, dtype=np.float32)
+            return self._canonical_boundary_point_to_3d(edge_index, edge_t)
 
         return np.asarray(basis_origin + basis_u * point_2d[0] + basis_v * point_2d[1], dtype=np.float32)
+
+    def _canonical_boundary_point_to_3d(self, edge_index, edge_t):
+        start_3d = self.vertices[edge_index].to_np()
+        end_3d = self.vertices[(edge_index + 1) % len(self.vertices)].to_np()
+        canonical_start, canonical_end, canonical_t = self._canonicalize_edge_t(start_3d, end_3d, edge_t)
+        snapped_t = self._snap_canonical_edge_t(canonical_start, canonical_end, canonical_t)
+        return np.asarray(canonical_start * (1.0 - snapped_t) + canonical_end * snapped_t, dtype=np.float32)
+
+    def _canonicalize_edge_t(self, start_3d, end_3d, edge_t):
+        start_key = tuple(np.round(start_3d, 10))
+        end_key = tuple(np.round(end_3d, 10))
+        if start_key <= end_key:
+            return start_3d, end_3d, float(edge_t)
+        return end_3d, start_3d, 1.0 - float(edge_t)
+
+    def _snap_canonical_edge_t(self, start_3d, end_3d, edge_t):
+        edge_length = float(np.linalg.norm(end_3d - start_3d))
+        if edge_length <= 1e-8:
+            return float(np.clip(edge_t, 0.0, 1.0))
+
+        edge_spacing = max(
+            edge_length * cfg.SUBTILE_MIN_DISTANCE_FACTOR,
+            edge_length * cfg.SUBTILE_EDGE_POINT_SPACING_FACTOR
+        )
+        snap_distance = edge_spacing * cfg.SUBTILE_EDGE_POLISH_MERGE_SPACING_FACTOR
+        if snap_distance <= 1e-8:
+            return float(np.clip(edge_t, 0.0, 1.0))
+
+        segment_count = max(1, int(np.ceil(edge_length / snap_distance)))
+        snapped_step = int(np.floor(float(edge_t) * segment_count + 0.5))
+        return float(np.clip(snapped_step / segment_count, 0.0, 1.0))
 
     def _generate_canonical_edge_points(
         self,
