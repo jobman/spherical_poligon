@@ -270,7 +270,14 @@ class GameWorld:
             self._submit_subtile_task(tile)
             submitted_tile_ids.add(tile.id)
 
-    def get_visible_tiles_for_subtiles(self, camera, aspect_ratio, limit=cfg.SUBTILE_VISIBLE_TILE_LIMIT, screen_margin=cfg.SUBTILE_SCREEN_MARGIN):
+    def get_visible_tiles_for_subtiles(
+        self,
+        camera,
+        aspect_ratio,
+        limit=cfg.SUBTILE_VISIBLE_TILE_LIMIT,
+        screen_margin_x=cfg.SUBTILE_SCREEN_MARGIN_X,
+        screen_margin_y=cfg.SUBTILE_SCREEN_MARGIN_Y
+    ):
         half_fov_y = math.radians(45.0) * 0.5
         tan_half_fov_y = math.tan(half_fov_y)
         camera_distance = camera.get_distance_to_center()
@@ -301,7 +308,7 @@ class GameWorld:
 
         ndc_x = candidate_centers[:, 0] / projected_half_width
         ndc_y = candidate_centers[:, 1] / projected_half_height
-        screen_mask = (np.abs(ndc_x) <= screen_margin) & (np.abs(ndc_y) <= screen_margin)
+        screen_mask = (np.abs(ndc_x) <= screen_margin_x) & (np.abs(ndc_y) <= screen_margin_y)
         if not np.any(screen_mask):
             return []
 
