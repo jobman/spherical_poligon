@@ -513,16 +513,41 @@ class GameWorld:
 
         return {
             "subtiles": [
-                [
-                    np.asarray(vertex, dtype=np.float32)
-                    for vertex in subtile.vertices
-                ]
+                self._serialize_subtile(subtile)
                 for subtile in subtiles
             ],
             "seed_points": [
                 np.asarray(point, dtype=np.float32)
                 for point in seed_points
             ],
+        }
+
+    def _serialize_subtile(self, subtile):
+        return {
+            "vertices": [
+                np.asarray(vertex, dtype=np.float32)
+                for vertex in subtile.vertices
+            ],
+            "battle_field": self._serialize_battle_field(subtile.battle_field),
+        }
+
+    def _serialize_battle_field(self, battle_field):
+        if battle_field is None:
+            return None
+
+        return {
+            "polygon": [
+                np.asarray(point, dtype=np.float32)
+                for point in battle_field.get("polygon", [])
+            ],
+            "hexes": [
+                [
+                    np.asarray(point, dtype=np.float32)
+                    for point in hex_polygon
+                ]
+                for hex_polygon in battle_field.get("hexes", [])
+            ],
+            "hex_radius": float(battle_field.get("hex_radius", 0.0)),
         }
 
     def _apply_serialized_subtiles(self, tile, serialized_subtiles):
@@ -546,16 +571,52 @@ class GameWorld:
     def _deserialize_subtiles(self, serialized_subtiles):
         from tile import SubTile
 
-        return [
-            SubTile(
-                vertices=[
-                    np.asarray(vertex, dtype=np.float32)
-                    for vertex in polygon
-                ],
-                color=np.array([0, 0, 0], dtype=np.float32)
+        subtiles = []
+        for serialized_subtile in self._get_serialized_subtile_polygons(serialized_subtiles):
+            if isinstance(serialized_subtile, dict):
+                polygon = serialized_subtile.get("vertices", [])
+                battle_field = self._deserialize_battle_field(serialized_subtile.get("battle_field"))
+            else:
+                polygon = serialized_subtile
+                battle_field = None
+
+            subtiles.append(
+                SubTile(
+                    vertices=[
+                        np.asarray(vertex, dtype=np.float32)
+                        for vertex in polygon
+                    ],
+                    color=np.array([0, 0, 0], dtype=np.float32),
+                    battle_field=battle_field
+                )
             )
-            for polygon in self._get_serialized_subtile_polygons(serialized_subtiles)
-        ]
+
+        return subtiles
+
+    def _deserialize_battle_field(self, battle_field):
+        if battle_field is None:
+            return None
+
+        return {
+            "polygon": [
+                np.asarray(point, dtype=np.float32)
+                for point in battle_field.get("polygon", [])
+            ],
+            "hexes": [
+                [
+                    np.asarray(point, dtype=np.float32)
+                    for point in hex_polygon
+                ]
+                for hex_polygon in battle_field.get("hexes", [])
+            ],
+            "hex_radius": float(battle_field.get("hex_radius", 0.0)),
+        }
+
+    def persist_tile_subtiles(self, tile):
+        self.subtile_cache[tile.id] = self._serialize_subtiles(tile)
+        self.pending_cache_save_count += 1
+        self._save_subtile_cache()
+        self.pending_cache_save_count = 0
 
     def _polish_tile_edges_with_generated_neighbors(self, tile):
         if not tile.subtiles:

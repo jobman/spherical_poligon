@@ -32,6 +32,9 @@ class InputHandler:
         return True # Signal to continue
 
     def handle_keyboard_input(self, keys):
+        if self.renderer.battle_mode:
+            return
+
         inversion_factor = -1 if math.cos(self.camera.angle_x) < 0 else 1
         speed_scale = self.camera.get_speed_scale()
         if keys[pygame.K_w]: self.camera.angle_x_vel += self.camera.keyboard_rotation_speed * speed_scale
@@ -43,7 +46,12 @@ class InputHandler:
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_F3:
                 self.renderer.debug_mode = not self.renderer.debug_mode
+            elif event.key == pygame.K_b:
+                self.renderer.toggle_battle_mode()
         elif event.type == pygame.MOUSEBUTTONDOWN:
+            if self.renderer.battle_mode:
+                self.renderer.handle_battle_mouse_down(event)
+                return
             if event.button == 1:
                 self.mouse_dragging = True
                 self.mouse_down_pos = event.pos
@@ -58,6 +66,9 @@ class InputHandler:
                 zoom_step = cfg.MIN_ZOOM_STEP + current_zoom_ratio * (cfg.MAX_ZOOM_STEP - cfg.MIN_ZOOM_STEP)
                 self.camera.target_zoom = min(cfg.MAX_ZOOM, self.camera.target_zoom + zoom_step)
         elif event.type == pygame.MOUSEBUTTONUP:
+            if self.renderer.battle_mode:
+                self.renderer.handle_battle_mouse_up(event)
+                return
             if event.button == 1 and self.mouse_down_pos:
                 dist_sq = (event.pos[0] - self.mouse_down_pos[0])**2 + (event.pos[1] - self.mouse_down_pos[1])**2
                 if dist_sq < 10: # Click threshold
@@ -65,6 +76,9 @@ class InputHandler:
                 self.mouse_dragging = False
                 self.mouse_down_pos = None
         elif event.type == pygame.MOUSEMOTION:
+            if self.renderer.battle_mode:
+                self.renderer.handle_battle_mouse_motion(event)
+                return
             if self.mouse_dragging:
                 inversion_factor = -1 if math.cos(self.camera.angle_x) < 0 else 1
                 speed_scale = self.camera.get_speed_scale()

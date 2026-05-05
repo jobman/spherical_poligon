@@ -15,6 +15,177 @@ except ImportError:
 class SubTile:
     vertices: list
     color: np.ndarray
+    battle_field: dict | None = None
+
+    def ensure_battle_field(self):
+        if self.battle_field is not None:
+            return self.battle_field
+
+        self.battle_field = self._build_battle_field()
+        return self.battle_field
+
+    def _build_battle_field(self):
+        polygon_2d = self._project_vertices_to_local_2d()
+        area = self._polygon_area_2d(polygon_2d)
+        if area <= 1e-12:
+            return {"polygon": polygon_2d, "hexes": [], "hex_radius": 0.0}
+
+        radius = max(cfg.BATTLE_FIELD_MIN_HEX_RADIUS, math.sqrt(area) * cfg.BATTLE_FIELD_HEX_RADIUS_FACTOR)
+        hexes = self._generate_battle_hexes(polygon_2d, radius)
+        while len(hexes) > cfg.BATTLE_FIELD_MAX_HEXES and radius > cfg.BATTLE_FIELD_MIN_HEX_RADIUS:
+            radius *= 1.15
+            hexes = self._generate_battle_hexes(polygon_2d, radius)
+
+        return {
+            "polygon": [np.asarray(point, dtype=np.float32) for point in polygon_2d],
+            "hexes": hexes,
+            "hex_radius": float(radius),
+        }
+
+    def _project_vertices_to_local_2d(self):
+        vertices = [np.asarray(vertex, dtype=np.float32) for vertex in self.vertices]
+        origin = np.mean(vertices, axis=0).astype(np.float32)
+        normal = np.cross(vertices[1] - vertices[0], vertices[2] - vertices[0])
+        normal_norm = np.linalg.norm(normal)
+        if normal_norm <= 1e-8:
+            normal = origin / max(np.linalg.norm(origin), 1e-8)
+        else:
+            normal /= normal_norm
+
+        basis_u = vertices[0] - origin
+        basis_u -= normal * np.dot(basis_u, normal)
+        if np.linalg.norm(basis_u) <= 1e-8:
+            basis_u = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+            if abs(np.dot(basis_u, normal)) > 0.9:
+                basis_u = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+            basis_u = np.cross(normal, basis_u)
+        basis_u /= np.linalg.norm(basis_u)
+        basis_v = np.cross(normal, basis_u)
+        basis_v /= np.linalg.norm(basis_v)
+
+        polygon = []
+        for vertex in vertices:
+            offset = vertex - origin
+            polygon.append(np.array([np.dot(offset, basis_u), np.dot(offset, basis_v)], dtype=np.float32))
+
+        if self._polygon_area_signed_2d(polygon) < 0:
+            polygon.reverse()
+        return polygon
+
+    def _generate_battle_hexes(self, polygon, radius):
+        polygon_array = np.asarray(polygon, dtype=np.float32)
+        min_x, min_y = polygon_array.min(axis=0) - radius * 2.0
+        max_x, max_y = polygon_array.max(axis=0) + radius * 2.0
+        hex_width = math.sqrt(3.0) * radius
+        row_height = 1.5 * radius
+        hexes = []
+        row = 0
+        y = float(min_y)
+        while y <= max_y:
+            x_offset = (row % 2) * hex_width * 0.5
+            x = float(min_x) - x_offset
+            while x <= max_x:
+                center = np.array([x, y], dtype=np.float32)
+                if self._point_in_polygon(center, polygon):
+                    hex_polygon = self._make_battle_hex(center, radius)
+                    clipped_hex = self._clip_polygon_to_convex_polygon(hex_polygon, polygon)
+                    if self._polygon_area_2d(clipped_hex) > 1e-10:
+                        hexes.append([np.asarray(point, dtype=np.float32) for point in clipped_hex])
+                x += hex_width
+            y += row_height
+            row += 1
+        return hexes
+
+    def _make_battle_hex(self, center, radius):
+        return [
+            np.array([
+                center[0] + radius * math.cos(math.radians(60.0 * index + 30.0)),
+                center[1] + radius * math.sin(math.radians(60.0 * index + 30.0)),
+            ], dtype=np.float32)
+            for index in range(6)
+        ]
+
+    def _clip_polygon_to_convex_polygon(self, polygon, boundary):
+        clipped = [np.asarray(point, dtype=np.float32) for point in polygon]
+        orientation = self._polygon_area_signed_2d(boundary)
+        for index in range(len(boundary)):
+            edge_start = boundary[index]
+            edge_end = boundary[(index + 1) % len(boundary)]
+            clipped = self._clip_polygon_to_boundary_edge(clipped, edge_start, edge_end, orientation)
+            if len(clipped) < 3:
+                return []
+        return clipped
+
+    def _clip_polygon_to_boundary_edge(self, polygon, edge_start, edge_end, boundary_orientation):
+        clipped = []
+        previous = polygon[-1]
+        previous_inside = self._is_inside_boundary_edge(previous, edge_start, edge_end, boundary_orientation)
+        for current in polygon:
+            current_inside = self._is_inside_boundary_edge(current, edge_start, edge_end, boundary_orientation)
+            if current_inside != previous_inside:
+                intersection = self._line_boundary_intersection(previous, current, edge_start, edge_end)
+                if intersection is not None:
+                    clipped.append(intersection)
+            if current_inside:
+                clipped.append(current)
+            previous = current
+            previous_inside = current_inside
+        return self._remove_duplicate_polygon_vertices(clipped)
+
+    def _is_inside_boundary_edge(self, point, edge_start, edge_end, boundary_orientation):
+        edge = edge_end - edge_start
+        relative = point - edge_start
+        cross = edge[0] * relative[1] - edge[1] * relative[0]
+        return cross >= -1e-8 if boundary_orientation >= 0 else cross <= 1e-8
+
+    def _line_boundary_intersection(self, start, end, edge_start, edge_end):
+        direction = end - start
+        edge_direction = edge_end - edge_start
+        denominator = direction[0] * edge_direction[1] - direction[1] * edge_direction[0]
+        if abs(denominator) <= 1e-10:
+            return None
+        relative = edge_start - start
+        t = (relative[0] * edge_direction[1] - relative[1] * edge_direction[0]) / denominator
+        return np.asarray(start + direction * np.clip(t, 0.0, 1.0), dtype=np.float32)
+
+    def _polygon_area_2d(self, polygon):
+        return abs(self._polygon_area_signed_2d(polygon))
+
+    def _polygon_area_signed_2d(self, polygon):
+        area = 0.0
+        for index, point in enumerate(polygon):
+            next_point = polygon[(index + 1) % len(polygon)]
+            area += float(point[0] * next_point[1] - next_point[0] * point[1])
+        return area * 0.5
+
+    def _point_in_polygon(self, point, polygon):
+        inside = False
+        j = len(polygon) - 1
+        for i in range(len(polygon)):
+            pi = polygon[i]
+            pj = polygon[j]
+            intersects = ((pi[1] > point[1]) != (pj[1] > point[1])) and (
+                point[0] < (pj[0] - pi[0]) * (point[1] - pi[1]) / ((pj[1] - pi[1]) + 1e-12) + pi[0]
+            )
+            if intersects:
+                inside = not inside
+            j = i
+        return inside
+
+    def _remove_duplicate_polygon_vertices(self, polygon, distance_epsilon=1e-8):
+        if len(polygon) < 2:
+            return polygon
+
+        cleaned = []
+        for point in polygon:
+            if cleaned and np.sum((point - cleaned[-1]) * (point - cleaned[-1])) <= distance_epsilon * distance_epsilon:
+                continue
+            cleaned.append(point)
+
+        if len(cleaned) > 1 and np.sum((cleaned[0] - cleaned[-1]) * (cleaned[0] - cleaned[-1])) <= distance_epsilon * distance_epsilon:
+            cleaned.pop()
+
+        return cleaned
 
 def generate_serialized_subtiles_for_tile(
     tile_id,
@@ -39,7 +210,10 @@ def generate_serialized_subtiles_for_tile(
     )
     return tile_id, {
         "subtiles": [
-            [np.asarray(vertex, dtype=np.float32) for vertex in subtile.vertices]
+            {
+                "vertices": [np.asarray(vertex, dtype=np.float32) for vertex in subtile.vertices],
+                "battle_field": subtile.battle_field,
+            }
             for subtile in tile.subtiles
         ],
         "seed_points": [

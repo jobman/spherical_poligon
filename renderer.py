@@ -41,6 +41,14 @@ class Renderer:
         self.selected_tile = None
         self.selected_subtile = None
         self.selected_unit = None
+        self.battle_mode = False
+        self.active_battle_subtile = None
+        self.active_battle_rotation = 0.0
+        self.battle_pan = np.array([0.0, 0.0], dtype=np.float32)
+        self.battle_zoom = 1.0
+        self.selected_battle_hex_index = None
+        self.battle_field_vbos = None
+        self.battle_field_vbo_key = None
 
         self.light_angle = 0
 
@@ -153,12 +161,21 @@ class Renderer:
         return running
 
     def update(self):
+        if self.battle_mode:
+            return
+
         self.camera.update()
         self.light_angle = (self.light_angle + cfg.LIGHT_ROTATION_SPEED) % (2 * math.pi)
 
     def draw(self):
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         glLoadIdentity()
+
+        if self.battle_mode:
+            self.draw_battle_field()
+            pygame.display.flip()
+            self.clock.tick(self.fps)
+            return
 
         self.camera.apply_transformations()
 
@@ -269,6 +286,387 @@ class Renderer:
 
         pygame.display.flip()
         self.clock.tick(self.fps)
+
+    def toggle_battle_mode(self):
+        if self.battle_mode:
+            self.battle_mode = False
+            self.active_battle_subtile = None
+            self.battle_field_vbo_key = None
+            return
+
+        if self.selected_tile is None or self.selected_subtile is None:
+            return
+
+        self.active_battle_subtile = self.selected_subtile
+        self.active_battle_subtile.ensure_battle_field()
+        self.active_battle_rotation = self._get_screen_aligned_subtile_rotation(self.selected_tile, self.selected_subtile)
+        self.battle_pan = np.array([0.0, 0.0], dtype=np.float32)
+        self.battle_zoom = 1.0
+        self.selected_battle_hex_index = None
+        self.battle_field_vbo_key = None
+        self.game_world.persist_tile_subtiles(self.selected_tile)
+        self.battle_mode = True
+
+    def handle_battle_mouse_down(self, event):
+        if event.button == 1:
+            self.input_handler.mouse_dragging = True
+            self.input_handler.mouse_down_pos = event.pos
+        elif event.button == 4:
+            self.adjust_battle_zoom(cfg.BATTLE_FIELD_ZOOM_STEP, event.pos)
+        elif event.button == 5:
+            self.adjust_battle_zoom(1.0 / cfg.BATTLE_FIELD_ZOOM_STEP, event.pos)
+
+    def handle_battle_mouse_up(self, event):
+        if event.button != 1:
+            return
+
+        if self.input_handler.mouse_down_pos:
+            dist_sq = (
+                (event.pos[0] - self.input_handler.mouse_down_pos[0]) ** 2 +
+                (event.pos[1] - self.input_handler.mouse_down_pos[1]) ** 2
+            )
+            if dist_sq < 10:
+                self.select_battle_hex_at_pos(event.pos)
+        self.input_handler.mouse_dragging = False
+        self.input_handler.mouse_down_pos = None
+
+    def handle_battle_mouse_motion(self, event):
+        if not self.input_handler.mouse_dragging:
+            return
+
+        aspect = self.width / self.height if self.height else 1.0
+        rel_x, rel_y = event.rel
+        self.battle_pan += np.array([
+            (rel_x / max(self.width, 1)) * 2.0 * aspect,
+            (-rel_y / max(self.height, 1)) * 2.0,
+        ], dtype=np.float32) * cfg.BATTLE_FIELD_PAN_SPEED
+        self.battle_field_vbo_key = None
+
+    def adjust_battle_zoom(self, factor, mouse_pos=None):
+        old_zoom = self.battle_zoom
+        new_zoom = float(np.clip(old_zoom * factor, cfg.BATTLE_FIELD_MIN_ZOOM, cfg.BATTLE_FIELD_MAX_ZOOM))
+        if abs(new_zoom - old_zoom) <= 1e-8:
+            return
+
+        if mouse_pos is not None:
+            before = self._screen_to_battle_world(mouse_pos)
+            self.battle_zoom = new_zoom
+            after = self._screen_to_battle_world(mouse_pos)
+            self.battle_pan += (after - before) * new_zoom
+        else:
+            self.battle_zoom = new_zoom
+        self.battle_field_vbo_key = None
+
+    def select_battle_hex_at_pos(self, mouse_pos):
+        battle_field = self.active_battle_subtile.battle_field if self.active_battle_subtile else None
+        if not battle_field:
+            return
+
+        world_point = self._screen_to_battle_world(mouse_pos)
+        hexes = battle_field.get("hexes", [])
+        for index, hex_polygon in enumerate(hexes):
+            polygon = [np.asarray(point, dtype=np.float32) for point in hex_polygon]
+            if self._battle_point_in_polygon(world_point, polygon):
+                self.selected_battle_hex_index = index
+                self.battle_field_vbo_key = None
+                return
+        self.selected_battle_hex_index = None
+        self.battle_field_vbo_key = None
+
+    def draw_battle_field(self):
+        glDisable(GL_LIGHTING)
+        glDisable(GL_DEPTH_TEST)
+        glDisable(GL_CULL_FACE)
+        background = np.asarray(cfg.BATTLE_FIELD_BACKGROUND_COLOR, dtype=np.float32) / 255.0
+        glClearColor(float(background[0]), float(background[1]), float(background[2]), 1.0)
+        glClear(GL_COLOR_BUFFER_BIT)
+
+        glMatrixMode(GL_PROJECTION)
+        glPushMatrix()
+        glLoadIdentity()
+        aspect = self.width / self.height if self.height else 1.0
+        glOrtho(-aspect, aspect, -1.0, 1.0, -1.0, 1.0)
+
+        glMatrixMode(GL_MODELVIEW)
+        glPushMatrix()
+        glLoadIdentity()
+
+        battle_field = self.active_battle_subtile.battle_field if self.active_battle_subtile else None
+        if battle_field:
+            self._draw_battle_field_geometry(battle_field, aspect)
+
+        glPopMatrix()
+        glMatrixMode(GL_PROJECTION)
+        glPopMatrix()
+        glMatrixMode(GL_MODELVIEW)
+
+        glEnable(GL_CULL_FACE)
+        glEnable(GL_DEPTH_TEST)
+        glEnable(GL_LIGHTING)
+        glClearColor(
+            cfg.BACKGROUND_COLOR[0] / 255.0,
+            cfg.BACKGROUND_COLOR[1] / 255.0,
+            cfg.BACKGROUND_COLOR[2] / 255.0,
+            1.0
+        )
+
+    def _draw_battle_field_geometry(self, battle_field, aspect):
+        polygon = [np.asarray(point, dtype=np.float32) for point in battle_field.get("polygon", [])]
+        hexes = battle_field.get("hexes", [])
+        if len(polygon) < 3:
+            return
+
+        transform = self._make_battle_field_transform(polygon, aspect)
+        render_data = self._get_battle_field_render_data(battle_field, polygon, hexes, transform)
+        self._draw_battle_field_render_data(render_data)
+
+    def _get_battle_field_render_data(self, battle_field, polygon, hexes, transform):
+        key = (
+            id(battle_field),
+            self.selected_battle_hex_index,
+            round(float(self.battle_pan[0]), 6),
+            round(float(self.battle_pan[1]), 6),
+            round(float(self.battle_zoom), 6),
+            round(float(self.active_battle_rotation), 6),
+            self.width,
+            self.height,
+        )
+        if self.battle_field_vbos is not None and self.battle_field_vbo_key == key:
+            return self.battle_field_vbos
+
+        render_data = self._build_battle_field_render_data(polygon, hexes, transform)
+        self._upload_battle_field_render_data(render_data)
+        self.battle_field_vbo_key = key
+        return self.battle_field_vbos
+
+    def _build_battle_field_render_data(self, polygon, hexes, transform):
+        fill_color = np.asarray(cfg.BATTLE_FIELD_HEX_COLOR, dtype=np.float32) / 255.0
+        selected_fill_color = np.asarray(cfg.BATTLE_FIELD_SELECTED_HEX_COLOR, dtype=np.float32) / 255.0
+        edge_color = np.asarray(cfg.BATTLE_FIELD_HEX_EDGE_COLOR, dtype=np.float32) / 255.0
+        boundary_color = np.asarray(cfg.BATTLE_FIELD_BOUNDARY_COLOR, dtype=np.float32) / 255.0
+        fill_vertices = []
+        fill_colors = []
+        line_vertices = []
+        line_colors = []
+        boundary_vertices = []
+        boundary_colors = []
+
+        for hex_index, hex_polygon in enumerate(hexes):
+            if len(hex_polygon) < 3:
+                continue
+            color = selected_fill_color if hex_index == self.selected_battle_hex_index else fill_color
+            transformed_hex = [transform(point) for point in hex_polygon]
+            for index in range(1, len(transformed_hex) - 1):
+                fill_vertices.extend([transformed_hex[0], transformed_hex[index], transformed_hex[index + 1]])
+                fill_colors.extend([color, color, color])
+        
+            for index in range(len(transformed_hex)):
+                line_vertices.extend([transformed_hex[index], transformed_hex[(index + 1) % len(transformed_hex)]])
+                line_colors.extend([edge_color, edge_color])
+
+        transformed_boundary = [transform(point) for point in polygon]
+        for index in range(len(transformed_boundary)):
+            boundary_vertices.extend([
+                transformed_boundary[index],
+                transformed_boundary[(index + 1) % len(transformed_boundary)]
+            ])
+            boundary_colors.extend([boundary_color, boundary_color])
+
+        return {
+            "fill_vertices": np.asarray(fill_vertices, dtype=np.float32),
+            "fill_colors": np.asarray(fill_colors, dtype=np.float32),
+            "line_vertices": np.asarray(line_vertices, dtype=np.float32),
+            "line_colors": np.asarray(line_colors, dtype=np.float32),
+            "boundary_vertices": np.asarray(boundary_vertices, dtype=np.float32),
+            "boundary_colors": np.asarray(boundary_colors, dtype=np.float32),
+        }
+
+    def _upload_battle_field_render_data(self, render_data):
+        if self.battle_field_vbos is None:
+            self.battle_field_vbos = {
+                "fill_vertices": glGenBuffers(1),
+                "fill_colors": glGenBuffers(1),
+                "line_vertices": glGenBuffers(1),
+                "line_colors": glGenBuffers(1),
+                "boundary_vertices": glGenBuffers(1),
+                "boundary_colors": glGenBuffers(1),
+                "fill_count": 0,
+                "line_count": 0,
+                "boundary_count": 0,
+            }
+
+        for key in ("fill_vertices", "fill_colors", "line_vertices", "line_colors", "boundary_vertices", "boundary_colors"):
+            glBindBuffer(GL_ARRAY_BUFFER, self.battle_field_vbos[key])
+            glBufferData(GL_ARRAY_BUFFER, render_data[key], GL_DYNAMIC_DRAW)
+
+        self.battle_field_vbos["fill_count"] = len(render_data["fill_vertices"])
+        self.battle_field_vbos["line_count"] = len(render_data["line_vertices"])
+        self.battle_field_vbos["boundary_count"] = len(render_data["boundary_vertices"])
+
+    def _draw_battle_field_render_data(self, render_data):
+        glEnableClientState(GL_VERTEX_ARRAY)
+        glEnableClientState(GL_COLOR_ARRAY)
+
+        if render_data["fill_count"] > 0:
+            glBindBuffer(GL_ARRAY_BUFFER, render_data["fill_vertices"])
+            glVertexPointer(2, GL_FLOAT, 0, None)
+            glBindBuffer(GL_ARRAY_BUFFER, render_data["fill_colors"])
+            glColorPointer(3, GL_FLOAT, 0, None)
+            glDrawArrays(GL_TRIANGLES, 0, render_data["fill_count"])
+
+        if render_data["line_count"] > 0:
+            glLineWidth(1.0)
+            glBindBuffer(GL_ARRAY_BUFFER, render_data["line_vertices"])
+            glVertexPointer(2, GL_FLOAT, 0, None)
+            glBindBuffer(GL_ARRAY_BUFFER, render_data["line_colors"])
+            glColorPointer(3, GL_FLOAT, 0, None)
+            glDrawArrays(GL_LINES, 0, render_data["line_count"])
+
+        if render_data["boundary_count"] > 0:
+            glLineWidth(3.0)
+            glBindBuffer(GL_ARRAY_BUFFER, render_data["boundary_vertices"])
+            glVertexPointer(2, GL_FLOAT, 0, None)
+            glBindBuffer(GL_ARRAY_BUFFER, render_data["boundary_colors"])
+            glColorPointer(3, GL_FLOAT, 0, None)
+            glDrawArrays(GL_LINES, 0, render_data["boundary_count"])
+
+        glDisableClientState(GL_COLOR_ARRAY)
+        glDisableClientState(GL_VERTEX_ARRAY)
+
+    def _make_battle_field_transform(self, polygon, aspect):
+        polygon_array = np.asarray(polygon, dtype=np.float32)
+        min_bounds = polygon_array.min(axis=0)
+        max_bounds = polygon_array.max(axis=0)
+        center = (min_bounds + max_bounds) * 0.5
+        size = np.maximum(max_bounds - min_bounds, 1e-8)
+        scale_x = (2.0 * aspect * cfg.BATTLE_FIELD_VIEW_SCALE) / float(size[0])
+        scale_y = (2.0 * cfg.BATTLE_FIELD_VIEW_SCALE) / float(size[1])
+        scale = min(scale_x, scale_y)
+        self._battle_transform_center = center
+        self._battle_transform_scale = scale
+
+        def transform(point):
+            point = np.asarray(point, dtype=np.float32)
+            local = (point - center) * scale
+            cos_angle = math.cos(self.active_battle_rotation)
+            sin_angle = math.sin(self.active_battle_rotation)
+            rotated = np.array([
+                local[0] * cos_angle - local[1] * sin_angle,
+                local[0] * sin_angle + local[1] * cos_angle,
+            ], dtype=np.float32)
+            return rotated * self.battle_zoom + self.battle_pan
+
+        return transform
+
+    def _screen_to_battle_world(self, mouse_pos):
+        aspect = self.width / self.height if self.height else 1.0
+        ndc = np.array([
+            (mouse_pos[0] / max(self.width, 1)) * 2.0 * aspect - aspect,
+            1.0 - (mouse_pos[1] / max(self.height, 1)) * 2.0,
+        ], dtype=np.float32)
+        local = (ndc - self.battle_pan) / max(self.battle_zoom, 1e-8)
+        cos_angle = math.cos(-self.active_battle_rotation)
+        sin_angle = math.sin(-self.active_battle_rotation)
+        unrotated = np.array([
+            local[0] * cos_angle - local[1] * sin_angle,
+            local[0] * sin_angle + local[1] * cos_angle,
+        ], dtype=np.float32)
+        return unrotated / max(getattr(self, "_battle_transform_scale", 1.0), 1e-8) + getattr(
+            self,
+            "_battle_transform_center",
+            np.array([0.0, 0.0], dtype=np.float32)
+        )
+
+    def _battle_point_in_polygon(self, point, polygon):
+        if len(polygon) < 3:
+            return False
+
+        inside = False
+        j = len(polygon) - 1
+        for i in range(len(polygon)):
+            pi = polygon[i]
+            pj = polygon[j]
+            intersects = ((pi[1] > point[1]) != (pj[1] > point[1])) and (
+                point[0] < (pj[0] - pi[0]) * (point[1] - pi[1]) / ((pj[1] - pi[1]) + 1e-12) + pi[0]
+            )
+            if intersects:
+                inside = not inside
+            j = i
+        return inside
+
+    def _get_screen_aligned_subtile_rotation(self, tile, subtile):
+        if tile is None or subtile is None or len(subtile.vertices) < 2:
+            return 0.0
+
+        world_direction = self._get_subtile_primary_direction_world(subtile)
+        screen_direction = self._project_world_direction_to_screen(world_direction)
+        local_direction = self._get_battle_field_primary_direction_local(subtile)
+        if screen_direction is None or local_direction is None:
+            return 0.0
+
+        screen_angle = math.atan2(screen_direction[1], screen_direction[0])
+        local_angle = math.atan2(local_direction[1], local_direction[0])
+        return screen_angle - local_angle
+
+    def _get_subtile_primary_direction_world(self, subtile):
+        vertices = [np.asarray(vertex, dtype=np.float32) for vertex in subtile.vertices]
+        center = np.mean(vertices, axis=0)
+        best_direction = None
+        best_distance_sq = -1.0
+        for vertex in vertices:
+            direction = vertex - center
+            distance_sq = float(np.dot(direction, direction))
+            if distance_sq > best_distance_sq:
+                best_distance_sq = distance_sq
+                best_direction = direction
+
+        if best_direction is None or np.linalg.norm(best_direction) <= 1e-8:
+            return None
+        return best_direction
+
+    def _project_world_direction_to_screen(self, direction):
+        if direction is None:
+            return None
+
+        rotation_x = np.array([
+            [1, 0, 0],
+            [0, math.cos(self.camera.angle_x), -math.sin(self.camera.angle_x)],
+            [0, math.sin(self.camera.angle_x), math.cos(self.camera.angle_x)]
+        ], dtype=np.float32)
+        rotation_y = np.array([
+            [math.cos(self.camera.angle_y), 0, math.sin(self.camera.angle_y)],
+            [0, 1, 0],
+            [-math.sin(self.camera.angle_y), 0, math.cos(self.camera.angle_y)]
+        ], dtype=np.float32)
+        rotated_direction = rotation_x @ (rotation_y @ np.asarray(direction, dtype=np.float32))
+        screen_direction = np.array([rotated_direction[0], rotated_direction[1]], dtype=np.float32)
+        norm = np.linalg.norm(screen_direction)
+        if norm <= 1e-8:
+            return None
+        return screen_direction / norm
+
+    def _get_battle_field_primary_direction_local(self, subtile):
+        battle_field = subtile.battle_field
+        if not battle_field:
+            return None
+
+        polygon = [np.asarray(point, dtype=np.float32) for point in battle_field.get("polygon", [])]
+        if len(polygon) < 2:
+            return None
+
+        center = np.mean(np.asarray(polygon, dtype=np.float32), axis=0)
+        best_direction = None
+        best_distance_sq = -1.0
+        for point in polygon:
+            direction = point - center
+            distance_sq = float(np.dot(direction, direction))
+            if distance_sq > best_distance_sq:
+                best_distance_sq = distance_sq
+                best_direction = direction
+
+        if best_direction is None or np.linalg.norm(best_direction) <= 1e-8:
+            return None
+        return best_direction
 
     def draw_selected_tile(self):
         if self.selected_subtile is not None:
