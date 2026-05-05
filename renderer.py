@@ -39,6 +39,7 @@ class Renderer:
         self.camera = Camera()
         self.input_handler = InputHandler(self.camera, self, game_world)
         self.selected_tile = None
+        self.selected_subtile = None
         self.selected_unit = None
 
         self.light_angle = 0
@@ -163,10 +164,36 @@ class Renderer:
 
         if self.input_handler.click_to_process:
             x, y = self.input_handler.click_to_process
-            clicked_tile = picking.get_tile_at_pos(x, y, self.width, self.height, self.camera, self.game_world)
+            clicked_tile = None
+            clicked_subtile = None
+            if self._should_pick_subtile():
+                clicked_tile, clicked_subtile = picking.get_subtile_at_pos(
+                    x,
+                    y,
+                    self.width,
+                    self.height,
+                    self.camera,
+                    self.game_world
+                )
+                if clicked_tile is not None and clicked_subtile is None:
+                    self.game_world.ensure_subtiles_generated([clicked_tile])
+                    clicked_tile, clicked_subtile = picking.get_subtile_at_pos(
+                        x,
+                        y,
+                        self.width,
+                        self.height,
+                        self.camera,
+                        self.game_world
+                    )
+            else:
+                clicked_tile = picking.get_tile_at_pos(x, y, self.width, self.height, self.camera, self.game_world)
             self.input_handler.click_to_process = None
 
-            if clicked_tile:
+            if clicked_subtile is not None:
+                self.selected_tile = clicked_tile
+                self.selected_subtile = clicked_subtile
+            elif clicked_tile:
+                self.selected_subtile = None
                 if self.selected_unit:
                     if self.selected_unit.move_to(clicked_tile):
                         self.selected_unit = None # Deselect after moving
@@ -244,7 +271,18 @@ class Renderer:
         self.clock.tick(self.fps)
 
     def draw_selected_tile(self):
-        if self.selected_tile:
+        if self.selected_subtile is not None:
+            glDisable(GL_LIGHTING)
+            glColor3f(1.0, 1.0, 0.0)
+            glLineWidth(3.0)
+
+            glBegin(GL_LINE_LOOP)
+            for vertex in self.selected_subtile.vertices:
+                glVertex3fv(np.asarray(vertex, dtype=np.float32) * 1.0035)
+            glEnd()
+
+            glEnable(GL_LIGHTING)
+        elif self.selected_tile:
             glDisable(GL_LIGHTING)
             glColor3f(1.0, 1.0, 0.0) # Yellow
             glLineWidth(3.0)
@@ -323,6 +361,9 @@ class Renderer:
 
         fade_t = (zoom_t - fade_start) / (fade_end - fade_start)
         return float(1.0 - fade_t)
+
+    def _should_pick_subtile(self):
+        return self._should_render_subtiles() and self._get_subtile_edge_alpha() >= cfg.SUBTILE_PICK_FULL_VISIBILITY_ALPHA
 
     def _get_subtile_edge_vbo(self, tile):
         if not tile.subtiles:
