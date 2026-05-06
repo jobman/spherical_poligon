@@ -89,8 +89,15 @@ class SubTile:
                 if self._point_in_polygon(center, polygon):
                     hex_polygon = self._make_battle_hex(center, radius)
                     clipped_hex = self._clip_polygon_to_convex_polygon(hex_polygon, polygon)
-                    if self._polygon_area_2d(clipped_hex) > 1e-10:
-                        hexes.append([np.asarray(point, dtype=np.float32) for point in clipped_hex])
+                    clipped_area = self._polygon_area_2d(clipped_hex)
+                    full_area = self._polygon_area_2d(hex_polygon)
+                    if clipped_area > 1e-10 and full_area > 1e-10:
+                        hexes.append({
+                            "polygon": [np.asarray(point, dtype=np.float32) for point in hex_polygon],
+                            "clipped_polygon": [np.asarray(point, dtype=np.float32) for point in clipped_hex],
+                            "center": np.asarray(center, dtype=np.float32),
+                            "coverage": float(np.clip(clipped_area / full_area, 0.0, 1.0)),
+                        })
                 x += hex_width
             y += row_height
             row += 1

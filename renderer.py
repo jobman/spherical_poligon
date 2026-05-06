@@ -44,6 +44,7 @@ class Renderer:
         self.battle_mode = False
         self.active_battle_subtile = None
         self.active_battle_rotation = 0.0
+        self.active_battle_context_polygons = []
         self.battle_pan = np.array([0.0, 0.0], dtype=np.float32)
         self.battle_zoom = 1.0
         self.selected_battle_hex_index = None
@@ -291,6 +292,7 @@ class Renderer:
         if self.battle_mode:
             self.battle_mode = False
             self.active_battle_subtile = None
+            self.active_battle_context_polygons = []
             self.battle_field_vbo_key = None
             return
 
@@ -300,6 +302,11 @@ class Renderer:
         self.active_battle_subtile = self.selected_subtile
         self.active_battle_subtile.ensure_battle_field()
         self.active_battle_rotation = self._get_screen_aligned_subtile_rotation(self.selected_tile, self.selected_subtile)
+        self.active_battle_context_polygons = self._collect_battle_context_polygons(self.selected_tile, self.selected_subtile)
+        battle_polygon = self.active_battle_subtile.battle_field.get("polygon", [])
+        if len(battle_polygon) >= 3:
+            aspect = self.width / self.height if self.height else 1.0
+            self._prepare_battle_field_transform(battle_polygon, aspect)
         self.battle_pan = np.array([0.0, 0.0], dtype=np.float32)
         self.battle_zoom = 1.0
         self.selected_battle_hex_index = None
@@ -340,7 +347,6 @@ class Renderer:
             (rel_x / max(self.width, 1)) * 2.0 * aspect,
             (-rel_y / max(self.height, 1)) * 2.0,
         ], dtype=np.float32) * cfg.BATTLE_FIELD_PAN_SPEED
-        self.battle_field_vbo_key = None
 
     def adjust_battle_zoom(self, factor, mouse_pos=None):
         old_zoom = self.battle_zoom
@@ -355,7 +361,6 @@ class Renderer:
             self.battle_pan += (after - before) * new_zoom
         else:
             self.battle_zoom = new_zoom
-        self.battle_field_vbo_key = None
 
     def select_battle_hex_at_pos(self, mouse_pos):
         battle_field = self.active_battle_subtile.battle_field if self.active_battle_subtile else None
@@ -365,13 +370,11 @@ class Renderer:
         world_point = self._screen_to_battle_world(mouse_pos)
         hexes = battle_field.get("hexes", [])
         for index, hex_polygon in enumerate(hexes):
-            polygon = [np.asarray(point, dtype=np.float32) for point in hex_polygon]
+            polygon = self._get_battle_hex_polygon(hex_polygon)
             if self._battle_point_in_polygon(world_point, polygon):
                 self.selected_battle_hex_index = index
-                self.battle_field_vbo_key = None
                 return
         self.selected_battle_hex_index = None
-        self.battle_field_vbo_key = None
 
     def draw_battle_field(self):
         glDisable(GL_LIGHTING)
@@ -416,34 +419,68 @@ class Renderer:
         if len(polygon) < 3:
             return
 
-        transform = self._make_battle_field_transform(polygon, aspect)
-        render_data = self._get_battle_field_render_data(battle_field, polygon, hexes, transform)
+        self._prepare_battle_field_transform(polygon, aspect)
+        render_data = self._get_battle_field_render_data(battle_field, polygon, hexes)
+        glPushMatrix()
+        self._apply_battle_field_transform()
+        self._draw_battle_context_polygons()
         self._draw_battle_field_render_data(render_data)
+        self._draw_selected_battle_hex(hexes)
+        glPopMatrix()
 
-    def _get_battle_field_render_data(self, battle_field, polygon, hexes, transform):
+    def _draw_battle_context_polygons(self):
+        if not self.active_battle_context_polygons:
+            return
+
+        fill_color = np.asarray(cfg.BATTLE_FIELD_CONTEXT_FILL_COLOR, dtype=np.float32) / 255.0
+        edge_color = np.asarray(cfg.BATTLE_FIELD_CONTEXT_EDGE_COLOR, dtype=np.float32) / 255.0
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+
+        for item in self.active_battle_context_polygons:
+            polygon = item["polygon"]
+            alpha = float(item["alpha"])
+            if len(polygon) < 3:
+                continue
+
+            glColor4f(float(fill_color[0]), float(fill_color[1]), float(fill_color[2]), alpha)
+            glBegin(GL_POLYGON)
+            for point in polygon:
+                glVertex2fv(point)
+            glEnd()
+
+            glColor4f(float(edge_color[0]), float(edge_color[1]), float(edge_color[2]), min(1.0, alpha + 0.12))
+            glLineWidth(1.2)
+            glBegin(GL_LINE_LOOP)
+            for point in polygon:
+                glVertex2fv(point)
+            glEnd()
+
+        glDisable(GL_BLEND)
+
+    def _get_battle_field_render_data(self, battle_field, polygon, hexes):
         key = (
             id(battle_field),
-            self.selected_battle_hex_index,
-            round(float(self.battle_pan[0]), 6),
-            round(float(self.battle_pan[1]), 6),
-            round(float(self.battle_zoom), 6),
-            round(float(self.active_battle_rotation), 6),
-            self.width,
-            self.height,
+            len(self.active_battle_context_polygons),
         )
         if self.battle_field_vbos is not None and self.battle_field_vbo_key == key:
             return self.battle_field_vbos
 
-        render_data = self._build_battle_field_render_data(polygon, hexes, transform)
+        render_data = self._build_battle_field_render_data(battle_field, polygon, hexes)
         self._upload_battle_field_render_data(render_data)
         self.battle_field_vbo_key = key
         return self.battle_field_vbos
 
-    def _build_battle_field_render_data(self, polygon, hexes, transform):
-        fill_color = np.asarray(cfg.BATTLE_FIELD_HEX_COLOR, dtype=np.float32) / 255.0
-        selected_fill_color = np.asarray(cfg.BATTLE_FIELD_SELECTED_HEX_COLOR, dtype=np.float32) / 255.0
-        edge_color = np.asarray(cfg.BATTLE_FIELD_HEX_EDGE_COLOR, dtype=np.float32) / 255.0
-        boundary_color = np.asarray(cfg.BATTLE_FIELD_BOUNDARY_COLOR, dtype=np.float32) / 255.0
+    def _build_battle_field_render_data(self, battle_field, polygon, hexes):
+        fill_color = self._rgba(cfg.BATTLE_FIELD_HEX_COLOR, 1.0)
+        edge_color = self._rgba(cfg.BATTLE_FIELD_HEX_EDGE_COLOR, 1.0)
+        boundary_color = self._rgba(cfg.BATTLE_FIELD_BOUNDARY_COLOR, 1.0)
+        context_fill_color = np.asarray(cfg.BATTLE_FIELD_CONTEXT_FILL_COLOR, dtype=np.float32) / 255.0
+        context_edge_color = np.asarray(cfg.BATTLE_FIELD_CONTEXT_EDGE_COLOR, dtype=np.float32) / 255.0
+        context_fill_vertices = []
+        context_fill_colors = []
+        context_line_vertices = []
+        context_line_colors = []
         fill_vertices = []
         fill_colors = []
         line_vertices = []
@@ -451,28 +488,61 @@ class Renderer:
         boundary_vertices = []
         boundary_colors = []
 
-        for hex_index, hex_polygon in enumerate(hexes):
+        context_hexes = self._build_battle_context_hexes(polygon, float(battle_field.get("hex_radius", 0.0)))
+        for hex_polygon, alpha, boundary_fade in context_hexes:
             if len(hex_polygon) < 3:
                 continue
-            color = selected_fill_color if hex_index == self.selected_battle_hex_index else fill_color
-            transformed_hex = [transform(point) for point in hex_polygon]
-            for index in range(1, len(transformed_hex) - 1):
-                fill_vertices.extend([transformed_hex[0], transformed_hex[index], transformed_hex[index + 1]])
+            hex_darkening = cfg.BATTLE_FIELD_BOUNDARY_HEX_DARKEN_FACTOR + (
+                1.0 - cfg.BATTLE_FIELD_BOUNDARY_HEX_DARKEN_FACTOR
+            ) * boundary_fade
+            fill_rgba = np.array([
+                context_fill_color[0] * hex_darkening,
+                context_fill_color[1] * hex_darkening,
+                context_fill_color[2] * hex_darkening,
+                alpha,
+            ], dtype=np.float32)
+            line_rgba = np.array([
+                context_edge_color[0],
+                context_edge_color[1],
+                context_edge_color[2],
+                min(1.0, alpha + 0.08),
+            ], dtype=np.float32)
+            for index in range(1, len(hex_polygon) - 1):
+                context_fill_vertices.extend([hex_polygon[0], hex_polygon[index], hex_polygon[index + 1]])
+                context_fill_colors.extend([fill_rgba, fill_rgba, fill_rgba])
+
+            for index in range(len(hex_polygon)):
+                context_line_vertices.extend([hex_polygon[index], hex_polygon[(index + 1) % len(hex_polygon)]])
+                context_line_colors.extend([line_rgba, line_rgba])
+
+        for hex_index, hex_polygon in enumerate(hexes):
+            polygon_points = self._get_battle_hex_polygon(hex_polygon)
+            if len(polygon_points) < 3:
+                continue
+            color = fill_color
+            if self._is_battle_hex_boundary(hex_polygon, polygon):
+                coverage = self._get_battle_hex_coverage(hex_polygon, polygon)
+                color = self._fade_boundary_hex_color(fill_color, coverage)
+            for index in range(1, len(polygon_points) - 1):
+                fill_vertices.extend([polygon_points[0], polygon_points[index], polygon_points[index + 1]])
                 fill_colors.extend([color, color, color])
         
-            for index in range(len(transformed_hex)):
-                line_vertices.extend([transformed_hex[index], transformed_hex[(index + 1) % len(transformed_hex)]])
+            for index in range(len(polygon_points)):
+                line_vertices.extend([polygon_points[index], polygon_points[(index + 1) % len(polygon_points)]])
                 line_colors.extend([edge_color, edge_color])
 
-        transformed_boundary = [transform(point) for point in polygon]
-        for index in range(len(transformed_boundary)):
+        for index in range(len(polygon)):
             boundary_vertices.extend([
-                transformed_boundary[index],
-                transformed_boundary[(index + 1) % len(transformed_boundary)]
+                polygon[index],
+                polygon[(index + 1) % len(polygon)]
             ])
             boundary_colors.extend([boundary_color, boundary_color])
 
         return {
+            "context_fill_vertices": np.asarray(context_fill_vertices, dtype=np.float32),
+            "context_fill_colors": np.asarray(context_fill_colors, dtype=np.float32),
+            "context_line_vertices": np.asarray(context_line_vertices, dtype=np.float32),
+            "context_line_colors": np.asarray(context_line_colors, dtype=np.float32),
             "fill_vertices": np.asarray(fill_vertices, dtype=np.float32),
             "fill_colors": np.asarray(fill_colors, dtype=np.float32),
             "line_vertices": np.asarray(line_vertices, dtype=np.float32),
@@ -484,21 +554,40 @@ class Renderer:
     def _upload_battle_field_render_data(self, render_data):
         if self.battle_field_vbos is None:
             self.battle_field_vbos = {
+                "context_fill_vertices": glGenBuffers(1),
+                "context_fill_colors": glGenBuffers(1),
+                "context_line_vertices": glGenBuffers(1),
+                "context_line_colors": glGenBuffers(1),
                 "fill_vertices": glGenBuffers(1),
                 "fill_colors": glGenBuffers(1),
                 "line_vertices": glGenBuffers(1),
                 "line_colors": glGenBuffers(1),
                 "boundary_vertices": glGenBuffers(1),
                 "boundary_colors": glGenBuffers(1),
+                "context_fill_count": 0,
+                "context_line_count": 0,
                 "fill_count": 0,
                 "line_count": 0,
                 "boundary_count": 0,
             }
 
-        for key in ("fill_vertices", "fill_colors", "line_vertices", "line_colors", "boundary_vertices", "boundary_colors"):
+        for key in (
+            "context_fill_vertices",
+            "context_fill_colors",
+            "context_line_vertices",
+            "context_line_colors",
+            "fill_vertices",
+            "fill_colors",
+            "line_vertices",
+            "line_colors",
+            "boundary_vertices",
+            "boundary_colors",
+        ):
             glBindBuffer(GL_ARRAY_BUFFER, self.battle_field_vbos[key])
-            glBufferData(GL_ARRAY_BUFFER, render_data[key], GL_DYNAMIC_DRAW)
+            glBufferData(GL_ARRAY_BUFFER, render_data[key], GL_STATIC_DRAW)
 
+        self.battle_field_vbos["context_fill_count"] = len(render_data["context_fill_vertices"])
+        self.battle_field_vbos["context_line_count"] = len(render_data["context_line_vertices"])
         self.battle_field_vbos["fill_count"] = len(render_data["fill_vertices"])
         self.battle_field_vbos["line_count"] = len(render_data["line_vertices"])
         self.battle_field_vbos["boundary_count"] = len(render_data["boundary_vertices"])
@@ -506,12 +595,29 @@ class Renderer:
     def _draw_battle_field_render_data(self, render_data):
         glEnableClientState(GL_VERTEX_ARRAY)
         glEnableClientState(GL_COLOR_ARRAY)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+
+        if render_data.get("context_fill_count", 0) > 0:
+            glBindBuffer(GL_ARRAY_BUFFER, render_data["context_fill_vertices"])
+            glVertexPointer(2, GL_FLOAT, 0, None)
+            glBindBuffer(GL_ARRAY_BUFFER, render_data["context_fill_colors"])
+            glColorPointer(4, GL_FLOAT, 0, None)
+            glDrawArrays(GL_TRIANGLES, 0, render_data["context_fill_count"])
+
+        if render_data.get("context_line_count", 0) > 0:
+            glLineWidth(1.0)
+            glBindBuffer(GL_ARRAY_BUFFER, render_data["context_line_vertices"])
+            glVertexPointer(2, GL_FLOAT, 0, None)
+            glBindBuffer(GL_ARRAY_BUFFER, render_data["context_line_colors"])
+            glColorPointer(4, GL_FLOAT, 0, None)
+            glDrawArrays(GL_LINES, 0, render_data["context_line_count"])
 
         if render_data["fill_count"] > 0:
             glBindBuffer(GL_ARRAY_BUFFER, render_data["fill_vertices"])
             glVertexPointer(2, GL_FLOAT, 0, None)
             glBindBuffer(GL_ARRAY_BUFFER, render_data["fill_colors"])
-            glColorPointer(3, GL_FLOAT, 0, None)
+            glColorPointer(4, GL_FLOAT, 0, None)
             glDrawArrays(GL_TRIANGLES, 0, render_data["fill_count"])
 
         if render_data["line_count"] > 0:
@@ -519,7 +625,7 @@ class Renderer:
             glBindBuffer(GL_ARRAY_BUFFER, render_data["line_vertices"])
             glVertexPointer(2, GL_FLOAT, 0, None)
             glBindBuffer(GL_ARRAY_BUFFER, render_data["line_colors"])
-            glColorPointer(3, GL_FLOAT, 0, None)
+            glColorPointer(4, GL_FLOAT, 0, None)
             glDrawArrays(GL_LINES, 0, render_data["line_count"])
 
         if render_data["boundary_count"] > 0:
@@ -527,13 +633,247 @@ class Renderer:
             glBindBuffer(GL_ARRAY_BUFFER, render_data["boundary_vertices"])
             glVertexPointer(2, GL_FLOAT, 0, None)
             glBindBuffer(GL_ARRAY_BUFFER, render_data["boundary_colors"])
-            glColorPointer(3, GL_FLOAT, 0, None)
+            glColorPointer(4, GL_FLOAT, 0, None)
             glDrawArrays(GL_LINES, 0, render_data["boundary_count"])
 
+        glDisable(GL_BLEND)
         glDisableClientState(GL_COLOR_ARRAY)
         glDisableClientState(GL_VERTEX_ARRAY)
 
-    def _make_battle_field_transform(self, polygon, aspect):
+    def _draw_selected_battle_hex(self, hexes):
+        if self.selected_battle_hex_index is None:
+            return
+        if self.selected_battle_hex_index < 0 or self.selected_battle_hex_index >= len(hexes):
+            return
+
+        polygon = self._get_battle_hex_polygon(hexes[self.selected_battle_hex_index])
+        if len(polygon) < 3:
+            return
+
+        fill_color = np.asarray(cfg.BATTLE_FIELD_SELECTED_HEX_COLOR, dtype=np.float32) / 255.0
+        edge_color = np.asarray(cfg.BATTLE_FIELD_BOUNDARY_COLOR, dtype=np.float32) / 255.0
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+
+        glColor4f(float(fill_color[0]), float(fill_color[1]), float(fill_color[2]), 0.88)
+        glBegin(GL_TRIANGLES)
+        for index in range(1, len(polygon) - 1):
+            glVertex2fv(polygon[0])
+            glVertex2fv(polygon[index])
+            glVertex2fv(polygon[index + 1])
+        glEnd()
+
+        glColor4f(float(edge_color[0]), float(edge_color[1]), float(edge_color[2]), 0.95)
+        glLineWidth(2.0)
+        glBegin(GL_LINE_LOOP)
+        for point in polygon:
+            glVertex2fv(point)
+        glEnd()
+
+        glDisable(GL_BLEND)
+
+    def _build_battle_context_hexes(self, active_polygon, radius):
+        if not self.active_battle_context_polygons or radius <= 1e-8:
+            return []
+
+        max_alpha = float(np.clip(cfg.BATTLE_FIELD_CONTEXT_HEX_MAX_ALPHA, 0.0, 1.0))
+        min_alpha = float(np.clip(cfg.BATTLE_FIELD_CONTEXT_HEX_MIN_ALPHA, 0.0, max_alpha))
+        depth = max(radius, radius * float(cfg.BATTLE_FIELD_CONTEXT_HEX_DEPTH_RADIUS))
+        owned_hexes = {}
+        full_area = self._battle_polygon_area_2d(self._make_battle_hex_2d(np.array([0.0, 0.0], dtype=np.float32), radius))
+        for item in self.active_battle_context_polygons:
+            polygon = item["polygon"]
+            if len(polygon) < 3:
+                continue
+
+            for hex_polygon, center_distance, center, clipped_area in self._generate_context_hex_band(active_polygon, polygon, radius, depth):
+                center_key = tuple(np.round(center / max(radius, 1e-8), 3))
+                current_owner = owned_hexes.get(center_key)
+                if current_owner is not None and clipped_area <= current_owner["area"]:
+                    continue
+
+                fade = 1.0 - min(1.0, center_distance / max(depth, 1e-8))
+                alpha = min_alpha + (max_alpha - min_alpha) * fade
+                coverage = float(np.clip(clipped_area / max(full_area, 1e-10), 0.0, 1.0))
+                owned_hexes[center_key] = {
+                    "area": clipped_area,
+                    "hex": hex_polygon,
+                    "alpha": alpha,
+                    "boundary_fade": coverage,
+                }
+
+        return [
+            (item["hex"], item["alpha"], item["boundary_fade"])
+            for item in owned_hexes.values()
+            if item["alpha"] > 0.0
+        ]
+
+    def _generate_context_hex_band(self, active_polygon, context_polygon, radius, depth):
+        active_array = np.asarray(active_polygon, dtype=np.float32)
+        polygon_array = np.asarray(context_polygon, dtype=np.float32)
+        min_x, min_y = polygon_array.min(axis=0) - radius * 2.0
+        max_x, max_y = polygon_array.max(axis=0) + radius * 2.0
+        hex_width = math.sqrt(3.0) * radius
+        row_height = 1.5 * radius
+        grid_origin_x, grid_origin_y = active_array.min(axis=0) - radius * 2.0
+        min_row = int(math.floor((float(min_y) - float(grid_origin_y)) / row_height)) - 1
+        max_row = int(math.ceil((float(max_y) - float(grid_origin_y)) / row_height)) + 1
+        hexes = []
+
+        for row in range(min_row, max_row + 1):
+            y = float(grid_origin_y) + row * row_height
+            x_offset = (row % 2) * hex_width * 0.5
+            row_origin_x = float(grid_origin_x) - x_offset
+            min_col = int(math.floor((float(min_x) - row_origin_x) / hex_width)) - 1
+            max_col = int(math.ceil((float(max_x) - row_origin_x) / hex_width)) + 1
+            for col in range(min_col, max_col + 1):
+                x = row_origin_x + col * hex_width
+                center = np.array([x, y], dtype=np.float32)
+                distance = self._point_to_polygon_edge_distance(center, active_polygon)
+                if distance <= depth and self._battle_point_in_polygon(center, context_polygon):
+                    hex_polygon = self._make_battle_hex_2d(center, radius)
+                    clipped_hex = self._clip_polygon_to_convex_polygon_2d(hex_polygon, context_polygon)
+                    clipped_area = self._battle_polygon_area_2d(clipped_hex)
+                    if clipped_area > 1e-10:
+                        hexes.append((hex_polygon, distance, center, clipped_area))
+        return hexes
+
+    def _make_battle_hex_2d(self, center, radius):
+        return [
+            np.array([
+                center[0] + radius * math.cos(math.radians(60.0 * index + 30.0)),
+                center[1] + radius * math.sin(math.radians(60.0 * index + 30.0)),
+            ], dtype=np.float32)
+            for index in range(6)
+        ]
+
+    def _clip_polygon_to_convex_polygon_2d(self, polygon, boundary):
+        clipped = [np.asarray(point, dtype=np.float32) for point in polygon]
+        orientation = self._battle_polygon_area_signed(boundary)
+        for index in range(len(boundary)):
+            edge_start = boundary[index]
+            edge_end = boundary[(index + 1) % len(boundary)]
+            clipped = self._clip_polygon_to_boundary_edge_2d(clipped, edge_start, edge_end, orientation)
+            if len(clipped) < 3:
+                return []
+        return clipped
+
+    def _clip_polygon_to_boundary_edge_2d(self, polygon, edge_start, edge_end, boundary_orientation):
+        clipped = []
+        previous = polygon[-1]
+        previous_inside = self._is_inside_boundary_edge_2d(previous, edge_start, edge_end, boundary_orientation)
+        for current in polygon:
+            current_inside = self._is_inside_boundary_edge_2d(current, edge_start, edge_end, boundary_orientation)
+            if current_inside != previous_inside:
+                intersection = self._line_boundary_intersection_2d(previous, current, edge_start, edge_end)
+                if intersection is not None:
+                    clipped.append(intersection)
+            if current_inside:
+                clipped.append(current)
+            previous = current
+            previous_inside = current_inside
+        return self._remove_duplicate_polygon_vertices_2d(clipped)
+
+    def _is_inside_boundary_edge_2d(self, point, edge_start, edge_end, boundary_orientation):
+        edge = edge_end - edge_start
+        relative = point - edge_start
+        cross = edge[0] * relative[1] - edge[1] * relative[0]
+        return cross >= -1e-8 if boundary_orientation >= 0 else cross <= 1e-8
+
+    def _line_boundary_intersection_2d(self, start, end, edge_start, edge_end):
+        direction = end - start
+        edge_direction = edge_end - edge_start
+        denominator = direction[0] * edge_direction[1] - direction[1] * edge_direction[0]
+        if abs(denominator) <= 1e-10:
+            return None
+        relative = edge_start - start
+        t = (relative[0] * edge_direction[1] - relative[1] * edge_direction[0]) / denominator
+        return np.asarray(start + direction * np.clip(t, 0.0, 1.0), dtype=np.float32)
+
+    def _battle_polygon_area_2d(self, polygon):
+        return abs(self._battle_polygon_area_signed(polygon)) if len(polygon) >= 3 else 0.0
+
+    def _remove_duplicate_polygon_vertices_2d(self, polygon, distance_epsilon=1e-8):
+        if len(polygon) < 2:
+            return polygon
+
+        cleaned = []
+        for point in polygon:
+            if cleaned and np.sum((point - cleaned[-1]) * (point - cleaned[-1])) <= distance_epsilon * distance_epsilon:
+                continue
+            cleaned.append(point)
+
+        if len(cleaned) > 1 and np.sum((cleaned[0] - cleaned[-1]) * (cleaned[0] - cleaned[-1])) <= distance_epsilon * distance_epsilon:
+            cleaned.pop()
+        return cleaned
+
+    def _point_to_polygon_edge_distance(self, point, polygon):
+        if len(polygon) < 2:
+            return 0.0
+
+        min_distance_sq = float("inf")
+        for index in range(len(polygon)):
+            distance_sq = self._point_segment_distance_sq_2d(point, polygon[index], polygon[(index + 1) % len(polygon)])
+            if distance_sq < min_distance_sq:
+                min_distance_sq = distance_sq
+        return math.sqrt(max(0.0, min_distance_sq))
+
+    def _point_segment_distance_sq_2d(self, point, segment_start, segment_end):
+        segment = segment_end - segment_start
+        segment_length_sq = float(np.dot(segment, segment))
+        if segment_length_sq <= 1e-16:
+            return float(np.sum((point - segment_start) * (point - segment_start)))
+
+        t = float(np.dot(point - segment_start, segment) / segment_length_sq)
+        t = np.clip(t, 0.0, 1.0)
+        closest = segment_start + segment * t
+        return float(np.sum((point - closest) * (point - closest)))
+
+    def _get_battle_hex_polygon(self, hex_entry):
+        if isinstance(hex_entry, dict):
+            return [np.asarray(point, dtype=np.float32) for point in hex_entry.get("polygon", [])]
+        return [np.asarray(point, dtype=np.float32) for point in hex_entry]
+
+    def _is_battle_hex_boundary(self, hex_entry, active_polygon):
+        if isinstance(hex_entry, dict):
+            return float(hex_entry.get("coverage", 1.0)) < 0.999
+
+        hex_polygon = self._get_battle_hex_polygon(hex_entry)
+        if len(hex_polygon) < 3:
+            return False
+        return any(not self._battle_point_in_polygon(point, active_polygon) for point in hex_polygon)
+
+    def _get_battle_hex_coverage(self, hex_entry, active_polygon):
+        if isinstance(hex_entry, dict):
+            return float(np.clip(hex_entry.get("coverage", 1.0), 0.0, 1.0))
+
+        hex_polygon = self._get_battle_hex_polygon(hex_entry)
+        full_area = self._battle_polygon_area_2d(hex_polygon)
+        if full_area <= 1e-10:
+            return 1.0
+
+        clipped_hex = self._clip_polygon_to_convex_polygon_2d(hex_polygon, active_polygon)
+        return float(np.clip(self._battle_polygon_area_2d(clipped_hex) / full_area, 0.0, 1.0))
+
+    def _fade_boundary_hex_color(self, fill_color, coverage):
+        smooth_coverage = float(np.clip(coverage, 0.0, 1.0))
+        smooth_coverage = smooth_coverage * smooth_coverage * (3.0 - 2.0 * smooth_coverage)
+        min_darken = float(np.clip(cfg.BATTLE_FIELD_BOUNDARY_HEX_DARKEN_FACTOR, 0.0, 1.0))
+        min_alpha = float(np.clip(cfg.BATTLE_FIELD_BOUNDARY_HEX_MIN_ALPHA, 0.0, 1.0))
+        darken = min_darken + (1.0 - min_darken) * smooth_coverage
+        alpha = min_alpha + (1.0 - min_alpha) * smooth_coverage
+        return np.array([
+            fill_color[0] * darken,
+            fill_color[1] * darken,
+            fill_color[2] * darken,
+            alpha,
+        ], dtype=np.float32)
+
+    def _rgba(self, color, alpha):
+        rgb = np.asarray(color, dtype=np.float32) / 255.0
+        return np.array([rgb[0], rgb[1], rgb[2], alpha], dtype=np.float32)
+
+    def _prepare_battle_field_transform(self, polygon, aspect):
         polygon_array = np.asarray(polygon, dtype=np.float32)
         min_bounds = polygon_array.min(axis=0)
         max_bounds = polygon_array.max(axis=0)
@@ -545,18 +885,14 @@ class Renderer:
         self._battle_transform_center = center
         self._battle_transform_scale = scale
 
-        def transform(point):
-            point = np.asarray(point, dtype=np.float32)
-            local = (point - center) * scale
-            cos_angle = math.cos(self.active_battle_rotation)
-            sin_angle = math.sin(self.active_battle_rotation)
-            rotated = np.array([
-                local[0] * cos_angle - local[1] * sin_angle,
-                local[0] * sin_angle + local[1] * cos_angle,
-            ], dtype=np.float32)
-            return rotated * self.battle_zoom + self.battle_pan
-
-        return transform
+    def _apply_battle_field_transform(self):
+        center = getattr(self, "_battle_transform_center", np.array([0.0, 0.0], dtype=np.float32))
+        scale = getattr(self, "_battle_transform_scale", 1.0)
+        glTranslatef(float(self.battle_pan[0]), float(self.battle_pan[1]), 0.0)
+        glScalef(float(self.battle_zoom), float(self.battle_zoom), 1.0)
+        glRotatef(math.degrees(float(self.active_battle_rotation)), 0.0, 0.0, 1.0)
+        glScalef(float(scale), float(scale), 1.0)
+        glTranslatef(float(-center[0]), float(-center[1]), 0.0)
 
     def _screen_to_battle_world(self, mouse_pos):
         aspect = self.width / self.height if self.height else 1.0
@@ -623,6 +959,92 @@ class Renderer:
         if best_direction is None or np.linalg.norm(best_direction) <= 1e-8:
             return None
         return best_direction
+
+    def _collect_battle_context_polygons(self, tile, subtile):
+        if tile is None or subtile is None:
+            return []
+
+        origin, basis_u, basis_v = self._make_subtile_context_basis(subtile)
+        active_polygon = self._project_subtile_to_context_2d(subtile, origin, basis_u, basis_v)
+        if len(active_polygon) < 3:
+            return []
+
+        active_center = np.mean(np.asarray(active_polygon, dtype=np.float32), axis=0)
+        active_radius = max(
+            np.linalg.norm(point - active_center)
+            for point in active_polygon
+        )
+        if active_radius <= 1e-8:
+            return []
+
+        context_radius = active_radius * cfg.BATTLE_FIELD_CONTEXT_RADIUS_FACTOR
+        candidates = []
+        for context_tile in [tile] + list(tile.neighbors):
+            if not context_tile.subtiles:
+                self.game_world.ensure_subtiles_generated([context_tile])
+            for context_subtile in context_tile.subtiles:
+                if context_subtile is subtile:
+                    continue
+                polygon = self._project_subtile_to_context_2d(context_subtile, origin, basis_u, basis_v)
+                if len(polygon) < 3:
+                    continue
+
+                center = np.mean(np.asarray(polygon, dtype=np.float32), axis=0)
+                distance = float(np.linalg.norm(center - active_center))
+                if distance > context_radius:
+                    continue
+
+                fade = 1.0 - min(1.0, distance / context_radius)
+                alpha = cfg.BATTLE_FIELD_CONTEXT_MIN_ALPHA + (
+                    cfg.BATTLE_FIELD_CONTEXT_MAX_ALPHA - cfg.BATTLE_FIELD_CONTEXT_MIN_ALPHA
+                ) * fade
+                candidates.append({
+                    "polygon": polygon,
+                    "alpha": alpha,
+                    "distance": distance,
+                })
+
+        candidates.sort(key=lambda item: item["distance"], reverse=True)
+        return candidates
+
+    def _make_subtile_context_basis(self, subtile):
+        vertices = [np.asarray(vertex, dtype=np.float32) for vertex in subtile.vertices]
+        origin = np.mean(vertices, axis=0).astype(np.float32)
+        normal = np.cross(vertices[1] - vertices[0], vertices[2] - vertices[0])
+        normal_norm = np.linalg.norm(normal)
+        if normal_norm <= 1e-8:
+            normal = origin / max(np.linalg.norm(origin), 1e-8)
+        else:
+            normal /= normal_norm
+
+        basis_u = vertices[0] - origin
+        basis_u -= normal * np.dot(basis_u, normal)
+        if np.linalg.norm(basis_u) <= 1e-8:
+            basis_u = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+            if abs(np.dot(basis_u, normal)) > 0.9:
+                basis_u = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+            basis_u = np.cross(normal, basis_u)
+        basis_u /= np.linalg.norm(basis_u)
+        basis_v = np.cross(normal, basis_u)
+        basis_v /= np.linalg.norm(basis_v)
+        return origin, basis_u, basis_v
+
+    def _project_subtile_to_context_2d(self, subtile, origin, basis_u, basis_v):
+        polygon = []
+        for vertex in subtile.vertices:
+            offset = np.asarray(vertex, dtype=np.float32) - origin
+            polygon.append(np.array([np.dot(offset, basis_u), np.dot(offset, basis_v)], dtype=np.float32))
+
+        if self._battle_polygon_area_signed(polygon) < 0:
+            polygon.reverse()
+        return polygon
+
+    def _battle_polygon_area_signed(self, polygon):
+        area = 0.0
+        for index, point in enumerate(polygon):
+            next_point = polygon[(index + 1) % len(polygon)]
+            area += float(point[0] * next_point[1] - next_point[0] * point[1])
+        return area * 0.5
 
     def _project_world_direction_to_screen(self, direction):
         if direction is None:

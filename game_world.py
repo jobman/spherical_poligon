@@ -541,14 +541,31 @@ class GameWorld:
                 for point in battle_field.get("polygon", [])
             ],
             "hexes": [
-                [
-                    np.asarray(point, dtype=np.float32)
-                    for point in hex_polygon
-                ]
-                for hex_polygon in battle_field.get("hexes", [])
+                self._serialize_battle_hex(hex_entry)
+                for hex_entry in battle_field.get("hexes", [])
             ],
             "hex_radius": float(battle_field.get("hex_radius", 0.0)),
         }
+
+    def _serialize_battle_hex(self, hex_entry):
+        if isinstance(hex_entry, dict):
+            return {
+                "polygon": [
+                    np.asarray(point, dtype=np.float32)
+                    for point in hex_entry.get("polygon", [])
+                ],
+                "clipped_polygon": [
+                    np.asarray(point, dtype=np.float32)
+                    for point in hex_entry.get("clipped_polygon", [])
+                ],
+                "center": np.asarray(hex_entry.get("center", [0.0, 0.0]), dtype=np.float32),
+                "coverage": float(hex_entry.get("coverage", 1.0)),
+            }
+
+        return [
+            np.asarray(point, dtype=np.float32)
+            for point in hex_entry
+        ]
 
     def _apply_serialized_subtiles(self, tile, serialized_subtiles):
         tile.subtiles = self._deserialize_subtiles(serialized_subtiles)
@@ -603,14 +620,31 @@ class GameWorld:
                 for point in battle_field.get("polygon", [])
             ],
             "hexes": [
-                [
-                    np.asarray(point, dtype=np.float32)
-                    for point in hex_polygon
-                ]
-                for hex_polygon in battle_field.get("hexes", [])
+                self._deserialize_battle_hex(hex_entry)
+                for hex_entry in battle_field.get("hexes", [])
             ],
             "hex_radius": float(battle_field.get("hex_radius", 0.0)),
         }
+
+    def _deserialize_battle_hex(self, hex_entry):
+        if isinstance(hex_entry, dict):
+            return {
+                "polygon": [
+                    np.asarray(point, dtype=np.float32)
+                    for point in hex_entry.get("polygon", [])
+                ],
+                "clipped_polygon": [
+                    np.asarray(point, dtype=np.float32)
+                    for point in hex_entry.get("clipped_polygon", [])
+                ],
+                "center": np.asarray(hex_entry.get("center", [0.0, 0.0]), dtype=np.float32),
+                "coverage": float(hex_entry.get("coverage", 1.0)),
+            }
+
+        return [
+            np.asarray(point, dtype=np.float32)
+            for point in hex_entry
+        ]
 
     def persist_tile_subtiles(self, tile):
         self.subtile_cache[tile.id] = self._serialize_subtiles(tile)
