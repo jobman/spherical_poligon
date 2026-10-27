@@ -1,0 +1,35 @@
+# Unity-generated state, at any project depth.
+**/[Ll]ibrary/
+**/[Tt]emp/
+**/[Oo]bj/
+**/[Ll]ogs/
+**/[Uu]ser[Ss]ettings/
+**/[Bb]uild/
+**/[Bb]uilds/
+**/MemoryCaptures/
+**/Recordings/
+**/.vs/
+**/.idea/
+**/.vscode/
+**/.utmp/
+**/sysinfo.txt
+**/*.csproj
+**/*.sln
+**/*.slnx
+**/*.user
+**/*.pidb
+**/*.booproj
+**/*.opendb
+**/*.VC.db
+**/*.unitypackage
+**/*.log
+
+# Local tooling and verification artifacts.
+.local/
+.artifacts/
+**/.artifacts.meta
+.env
+.env.*
+!.env.example
+
+# Unity .meta files are source assets and must be kept with their files.

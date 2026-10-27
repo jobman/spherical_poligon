@@ -1,0 +1,14 @@
+@import url("../CameraControls/CameraControls.uss");
+
+.lab-document { flex-grow: 1; }
+.lab-screen { flex-grow: 1; color: #ecf3fa; font-size: 15px; }
+.lab-header { height: 13%; padding: 18px 28px; }
+.lab-title { font-size: 24px; -unity-font-style: bold; }
+.lab-subtitle { color: #aebdcd; white-space: normal; margin-top: 5px; }
+.lab-preview-space { flex-grow: 1; }
+.lab-footer { height: 27%; min-height: 186px; padding: 12px 28px; background-color: #132434; }
+.lab-sliders { flex-direction: row; }
+.lab-control { flex-grow: 1; flex-basis: 0; margin-right: 20px; }
+.lab-actions { flex-direction: row; align-items: center; }
+.lab-actions > .copy-button { padding-left: 18px; padding-right: 18px; margin-right: 10px; }
+.lab-status { flex-grow: 1; color: #a6d9ca; white-space: normal; margin-left: 12px; }

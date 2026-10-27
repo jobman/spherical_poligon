@@ -1,0 +1,188 @@
+.camera-document {
+    flex-grow: 1;
+}
+
+.camera-screen {
+    flex-grow: 1;
+    color: #ecf3fa;
+    font-size: 14px;
+}
+.camera-panel {
+    width: 520px;
+    max-width: 90%;
+    max-height: 90%;
+    flex-shrink: 1;
+    padding: 24px;
+    background-color: rgba(13, 25, 39, 0.97);
+    border-width: 1px;
+    border-color: #33475a;
+    border-radius: 12px;
+}
+.camera-title {
+    font-size: 20px;
+    -unity-font-style: bold;
+    margin-bottom: 6px;
+}
+.camera-hint {
+    white-space: normal;
+    color: #b5c4d3;
+    margin-bottom: 18px;
+}
+.setting-heading {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+}
+.setting-value {
+    color: #85d7ed;
+    -unity-font-style: bold;
+    margin-left: 10px;
+}
+.setting-help {
+    color: #9eafc0;
+    font-size: 12px;
+    margin-top: 2px;
+}
+.inertia-help {
+    white-space: normal;
+    margin-bottom: 4px;
+}
+.sensitivity-slider {
+    height: 40px;
+    flex-direction: row;
+    margin-bottom: 14px;
+}
+.sensitivity-slider > .unity-base-field__input {
+    flex-grow: 1;
+}
+.sensitivity-slider .unity-base-slider__drag-container {
+    flex-grow: 1;
+    position: relative;
+    margin-left: 10px;
+    margin-right: 10px;
+}
+.sensitivity-slider .unity-base-slider__tracker {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 18px;
+    height: 4px;
+    background-color: #40586c;
+    border-radius: 2px;
+}
+.sensitivity-slider .unity-base-slider__dragger {
+    position: absolute;
+    top: 10px;
+    width: 20px;
+    height: 20px;
+    background-color: #85d7ed;
+    border-width: 2px;
+    border-color: #85d7ed;
+    border-radius: 10px;
+}
+.sensitivity-slider .unity-base-slider__dragger-border {
+    display: none;
+}
+.sensitivity-slider:focus .unity-base-slider__dragger {
+    border-color: #ffffff;
+}
+.sensitivity-slider:hover .unity-base-slider__dragger {
+    background-color: #bcf0fa;
+}
+.copy-button {
+    min-height: 38px;
+    justify-content: center;
+    align-items: center;
+    color: #ecf3fa;
+    background-color: #233f53;
+    border-width: 2px;
+    border-color: #40627b;
+    border-radius: 6px;
+    margin-top: 2px;
+    -unity-text-align: middle-center;
+    transition-duration: 0.12s;
+}
+.copy-button:hover {
+    background-color: #30556e;
+}
+.copy-button:active {
+    background-color: #142e40;
+}
+.copy-button:focus {
+    border-color: #85d7ed;
+}
+.copy-status {
+    min-height: 18px;
+    color: #9de0c0;
+    font-size: 12px;
+    margin-top: 8px;
+    white-space: normal;
+}
+.camera-footer {
+    white-space: normal;
+    color: #9eafc0;
+    font-size: 12px;
+    padding-top: 12px;
+    margin-top: 6px;
+    border-top-width: 1px;
+    border-top-color: #33475a;
+}
+
+.menu-overlay {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    align-items: center;
+    justify-content: center;
+    background-color: rgba(3, 9, 16, 0.7);
+}
+.menu-hint {
+    position: absolute;
+    left: 20px;
+    bottom: 20px;
+    color: #b5c4d3;
+    background-color: rgba(13, 25, 39, 0.85);
+    padding: 6px 10px;
+    border-radius: 6px;
+}
+.menu-button {
+    margin-top: 12px;
+    min-height: 44px;
+}
+.settings-page {
+    flex-shrink: 1;
+    min-height: 0;
+}
+.settings-scroll {
+    flex-shrink: 1;
+    min-height: 0;
+    margin-bottom: 12px;
+}
+.settings-scroll .unity-scroll-view__content-container {
+    padding-right: 12px;
+}
+.menu-actions {
+    flex-direction: row;
+    flex-shrink: 0;
+}
+.menu-actions > .copy-button {
+    flex-grow: 1;
+    flex-basis: 0;
+    margin-left: 3px;
+    margin-right: 3px;
+}
+.primary-button {
+    background-color: #305d70;
+    border-color: #85d7ed;
+}
+
+.world-page {
+    display: none;
+    flex-shrink: 1;
+}
+.world-help {
+    white-space: normal;
+    margin-bottom: 16px;
+}

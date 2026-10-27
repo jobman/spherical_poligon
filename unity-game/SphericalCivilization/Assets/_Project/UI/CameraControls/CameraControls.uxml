@@ -1,0 +1,83 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <ui:Style src="CameraControls.uss" />
+    <ui:VisualElement name="cameraScreen" class="camera-screen" picking-mode="Ignore">
+        <ui:Label name="menuHint" text="Esc — меню" class="menu-hint" picking-mode="Ignore" />
+        <ui:VisualElement name="menuOverlay" class="menu-overlay" style="display: none;">
+            <ui:VisualElement name="cameraPanel" class="camera-panel">
+                <ui:VisualElement name="mainMenu">
+                    <ui:Label text="Меню" class="camera-title" />
+                    <ui:Button name="continueButton" text="Продолжить" class="copy-button menu-button" />
+                    <ui:Button name="settingsButton" text="Настройки" class="copy-button menu-button" />
+                    <ui:Button name="worldButton" text="Карта" class="copy-button menu-button" />
+                    <ui:Button name="labButton" text="Подбор субтайлов" class="copy-button menu-button" />
+                    <ui:Label text="Esc — вернуться к игре" class="camera-footer" />
+                </ui:VisualElement>
+                <ui:VisualElement name="worldPage" class="world-page">
+                    <ui:Label text="Карта" class="camera-title" />
+                    <ui:Label text="Количество субтайлов для каждого типа. Меньше — крупнее ячейки, больше — мельче. Для подбора на нескольких примерах открой «Подбор субтайлов» в главном меню." class="camera-hint" />
+                    <ui:VisualElement class="setting-heading">
+                        <ui:Label text="В шестиугольнике" />
+                        <ui:Label name="subtileCountValue" text="37" class="setting-value" />
+                    </ui:VisualElement>
+                    <ui:SliderInt name="subtileCountSlider" class="sensitivity-slider" low-value="12" high-value="128" value="37" page-size="1" />
+                    <ui:VisualElement class="setting-heading">
+                        <ui:Label text="В пятиугольнике" />
+                        <ui:Label name="pentagonCountValue" text="37" class="setting-value" />
+                    </ui:VisualElement>
+                    <ui:SliderInt name="pentagonCountSlider" class="sensitivity-slider" low-value="12" high-value="128" value="37" page-size="1" />
+                    <ui:Label name="worldCountSummary" class="setting-help world-help" />
+                    <ui:Label text="«Применить» перестраивает карту и сбрасывает выделение. «Сохранить» также запоминает значение для следующих запусков. Положение камеры сохраняется." class="setting-help world-help" />
+                    <ui:VisualElement class="menu-actions">
+                        <ui:Button name="worldBackButton" text="Назад" class="copy-button" />
+                        <ui:Button name="applyWorldButton" text="Применить" class="copy-button" />
+                        <ui:Button name="saveWorldButton" text="Сохранить" class="copy-button primary-button" />
+                    </ui:VisualElement>
+                    <ui:Label name="worldStatus" class="copy-status" />
+                </ui:VisualElement>
+                <ui:VisualElement name="settingsPage" class="settings-page" style="display: none;">
+                    <ui:Label text="Настройки камеры" class="camera-title" />
+                    <ui:Label text="Изменения применяются сразу. «Сохранить» делает их настройками по умолчанию для следующих запусков." class="camera-hint" />
+                    <ui:ScrollView name="settingsScroll" class="settings-scroll" mode="Vertical" horizontal-scroller-visibility="Hidden" vertical-scroller-visibility="Auto">
+                        <ui:VisualElement class="setting-heading">
+                            <ui:Label text="Вращение мышью в пустоте" />
+                            <ui:Label name="backgroundSpeedValue" text="1.00×" class="setting-value" />
+                        </ui:VisualElement>
+                        <ui:Slider name="backgroundSpeedSlider" class="sensitivity-slider" low-value="0.1" high-value="5" value="1" page-size="0" />
+                        <ui:VisualElement class="setting-heading">
+                            <ui:Label text="Движение WASD / стрелки" />
+                            <ui:Label name="keyboardSpeedValue" text="1.00×" class="setting-value" />
+                        </ui:VisualElement>
+                        <ui:Slider name="keyboardSpeedSlider" class="sensitivity-slider" low-value="0.1" high-value="5" value="1" page-size="0" />
+                        <ui:VisualElement class="setting-heading">
+                            <ui:Label text="Поворот Q / E" />
+                            <ui:Label name="turnSpeedValue" text="2.64×" class="setting-value" />
+                        </ui:VisualElement>
+                        <ui:Slider name="turnSpeedSlider" class="sensitivity-slider" low-value="0.1" high-value="5" value="2.64" page-size="0" />
+                        <ui:VisualElement class="setting-heading">
+                            <ui:Label text="Приближение колёсиком" />
+                            <ui:Label name="scrollSpeedValue" text="1.00×" class="setting-value" />
+                        </ui:VisualElement>
+                        <ui:Slider name="scrollSpeedSlider" class="sensitivity-slider" low-value="0.1" high-value="5" value="1" page-size="0" />
+                        <ui:VisualElement class="setting-heading">
+                            <ui:Label text="Инерция вращения" />
+                            <ui:Label name="inertiaValue" text="0.11 с" class="setting-value" />
+                        </ui:VisualElement>
+                        <ui:Slider name="inertiaSlider" class="sensitivity-slider" low-value="0" high-value="1" value="0.11" page-size="0" />
+                        <ui:VisualElement class="setting-heading">
+                            <ui:Label text="Инерция приближения" />
+                            <ui:Label name="scrollInertiaValue" text="0.11 с" class="setting-value" />
+                        </ui:VisualElement>
+                        <ui:Slider name="scrollInertiaSlider" class="sensitivity-slider" low-value="0" high-value="1" value="0.11" page-size="0" />
+                        <ui:Label text="Инерция — время уменьшения скорости вдвое. 0 — без инерции." class="setting-help inertia-help" />
+                    </ui:ScrollView>
+                    <ui:VisualElement class="menu-actions">
+                        <ui:Button name="backButton" text="Назад" class="copy-button" />
+                        <ui:Button name="copyButton" text="Скопировать" class="copy-button" />
+                        <ui:Button name="saveButton" text="Сохранить" class="copy-button primary-button" />
+                    </ui:VisualElement>
+                    <ui:Label name="copyStatus" text="" class="copy-status" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+        </ui:VisualElement>
+    </ui:VisualElement>
+</ui:UXML>

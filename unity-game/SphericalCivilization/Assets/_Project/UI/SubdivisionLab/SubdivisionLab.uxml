@@ -1,0 +1,34 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <ui:Style src="SubdivisionLab.uss" />
+    <ui:VisualElement class="lab-screen" picking-mode="Ignore">
+        <ui:VisualElement class="lab-header" picking-mode="Ignore">
+            <ui:Label text="Подбор количества субтайлов" class="lab-title" />
+            <ui:Label text="Три шестиугольника сверху, три пятиугольника снизу. Реальные формы из мира, один масштаб. Ползунки обновляют примеры автоматически." class="lab-subtitle" />
+        </ui:VisualElement>
+        <ui:VisualElement class="lab-preview-space" picking-mode="Ignore" />
+        <ui:VisualElement class="lab-footer">
+            <ui:VisualElement class="lab-sliders">
+                <ui:VisualElement class="lab-control">
+                    <ui:VisualElement class="setting-heading">
+                        <ui:Label text="Шестиугольники · верхний ряд" />
+                        <ui:Label name="hexValue" text="37" class="setting-value" />
+                    </ui:VisualElement>
+                    <ui:SliderInt name="hexSlider" class="sensitivity-slider" low-value="12" high-value="128" value="37" page-size="1" />
+                </ui:VisualElement>
+                <ui:VisualElement class="lab-control">
+                    <ui:VisualElement class="setting-heading">
+                        <ui:Label text="Пятиугольники · нижний ряд" />
+                        <ui:Label name="pentValue" text="37" class="setting-value" />
+                    </ui:VisualElement>
+                    <ui:SliderInt name="pentSlider" class="sensitivity-slider" low-value="12" high-value="128" value="37" page-size="1" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+            <ui:VisualElement class="lab-actions">
+                <ui:Button name="copyLabButton" text="Скопировать значения" class="copy-button" />
+                <ui:Button name="saveLabButton" text="Сохранить" class="copy-button" />
+                <ui:Button name="applyLabButton" text="Применить к глобусу" class="copy-button primary-button" />
+                <ui:Label name="labStatus" text="Настройки мира изменятся только после сохранения." class="lab-status" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+    </ui:VisualElement>
+</ui:UXML>
