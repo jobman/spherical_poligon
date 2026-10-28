@@ -102,6 +102,7 @@ namespace SphericalCivilization
         private float _targetDistance;
         private bool _moved;
         private bool _selectOnClick;
+        private bool _attackOnClick;
         private bool _pointerStartedOnUI;
         private int _mouseButton = -1;
         private Vector3 _angularVelocity;
@@ -131,6 +132,7 @@ namespace SphericalCivilization
         private void Update()
         {
             if (!Application.isPlaying) return;
+            if (Battle.BattlefieldController.BlocksGlobeInput) return;
             if (Keyboard.current?.escapeKey.wasPressedThisFrame == true)
             {
                 CameraControlsPanel.HandleEscape();
@@ -168,7 +170,8 @@ namespace SphericalCivilization
                     StopInertia();
                     StopScrollInertia();
                 }
-                if (!_pointerStartedOnUI && BeginDrag(position, mouse.leftButton.wasPressedThisFrame))
+                if (!_pointerStartedOnUI && BeginDrag(position, mouse.leftButton.wasPressedThisFrame,
+                    mouse.rightButton.wasPressedThisFrame && !mouse.leftButton.wasPressedThisFrame))
                     _mouseButton = mouse.leftButton.wasPressedThisFrame ? 0 : 1;
             }
             if (_mouseButton >= 0)
@@ -207,7 +210,7 @@ namespace SphericalCivilization
             return true;
         }
 
-        public bool BeginDrag(Vector2 position, bool selectOnClick = true)
+        public bool BeginDrag(Vector2 position, bool selectOnClick = true, bool attackOnClick = false)
         {
             if (CameraControlsPanel.ContainsPointer(position))
             {
@@ -221,6 +224,7 @@ namespace SphericalCivilization
             _pressPosition = _previousPosition = position;
             _moved = false;
             _selectOnClick = selectOnClick;
+            _attackOnClick = attackOnClick;
             DragMode = GlobeDragMode.Background;
             if (_globe != null && _globe.GetComponent<MeshCollider>().Raycast(_camera.ScreenPointToRay(position), out var hit, 100f))
             {
@@ -250,8 +254,12 @@ namespace SphericalCivilization
         {
             if (DragMode == GlobeDragMode.None) return;
             if (position != _previousPosition) DragTo(position);
-            if (!_moved && _selectOnClick && _globe != null && !CameraControlsPanel.ContainsPointer(position))
-                _globe.TrySelectRay(_camera.ScreenPointToRay(position));
+            if (!_moved && _globe != null && !CameraControlsPanel.ContainsPointer(position))
+            {
+                var ray = _camera.ScreenPointToRay(position);
+                if (_attackOnClick) _globe.TrySetAttackTargetRay(ray);
+                else if (_selectOnClick) _globe.TrySelectRay(ray);
+            }
             if (!_moved) StopInertia();
             ResetGesture();
         }
@@ -268,6 +276,7 @@ namespace SphericalCivilization
             DragMode = GlobeDragMode.None;
             _mouseButton = -1;
             _pointerStartedOnUI = false;
+            _attackOnClick = false;
         }
 
         public void StopInertia() => _angularVelocity = Vector3.zero;

@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Collections.Generic;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -56,6 +57,7 @@ namespace SphericalCivilization.Editor
             var orbit = cameraObject.AddComponent<OrbitCamera>();
             orbit.ApplyView();
             EnsureCameraControls(orbit);
+            BattlefieldBootstrap.Install(globe);
 
             var sun = new GameObject("Sun").AddComponent<Light>();
             sun.type = LightType.Directional;
@@ -88,7 +90,9 @@ namespace SphericalCivilization.Editor
             PlayerSettings.productName = "Spherical Civilization";
             var scenePath = Root + "/Scenes/Globe.unity";
             EditorSceneManager.SaveScene(scene, scenePath);
-            EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(scenePath, true) };
+            var scenes = new List<EditorBuildSettingsScene>(EditorBuildSettings.scenes);
+            scenes.RemoveAll(s => s.path == scenePath); scenes.Insert(0, new EditorBuildSettingsScene(scenePath, true));
+            EditorBuildSettings.scenes = scenes.ToArray();
             AssetDatabase.SaveAssets();
             SceneView.lastActiveSceneView?.LookAt(Vector3.zero, Quaternion.Euler(20f, 35f, 0f), 2f);
             return $"Saved {scenePath}: {globe.TileCount} tiles, {globe.TriangleCount} triangles.";

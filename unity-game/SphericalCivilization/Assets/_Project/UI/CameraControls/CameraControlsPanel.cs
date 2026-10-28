@@ -14,14 +14,15 @@ namespace SphericalCivilization
         public static bool HasKeyboardFocus => IsMenuOpen;
 
         private static CameraControlsPanel _active;
-        private VisualElement _overlay, _mainMenu, _settingsPage, _hint;
+        private VisualElement _overlay, _mainMenu, _settingsPage;
+        private Label _hint;
         private Button _continueButton, _settingsButton, _backButton, _saveButton, _copyButton;
         private GlobePreview _globe;
         private VisualElement _worldPage;
         private Button _worldButton, _worldBackButton, _applyWorldButton, _saveWorldButton;
         private SliderInt _worldCount, _pentagonCount;
         private Label _pentagonValue;
-        private Button _labButton;
+        private Button _labButton, _battleLabButton;
         private Label _worldValue, _worldSummary, _worldStatus;
         private Label _status;
         private bool _isOpen, _dirty;
@@ -46,7 +47,7 @@ namespace SphericalCivilization
             _overlay = root.Q("menuOverlay");
             _mainMenu = root.Q("mainMenu");
             _settingsPage = root.Q("settingsPage");
-            _hint = root.Q("menuHint");
+            _hint = root.Q<Label>("menuHint");
             _status = root.Q<Label>("copyStatus");
             _continueButton = root.Q<Button>("continueButton");
             _settingsButton = root.Q<Button>("settingsButton");
@@ -63,6 +64,7 @@ namespace SphericalCivilization
             _pentagonCount = root.Q<SliderInt>("pentagonCountSlider");
             _pentagonValue = root.Q<Label>("pentagonCountValue");
             _labButton = root.Q<Button>("labButton");
+            _battleLabButton = root.Q<Button>("battleLabButton");
             _worldValue = root.Q<Label>("subtileCountValue");
             _worldSummary = root.Q<Label>("worldCountSummary");
             _worldStatus = root.Q<Label>("worldStatus");
@@ -86,6 +88,7 @@ namespace SphericalCivilization
             _worldCount.RegisterValueChangedCallback(WorldCountChanged);
             _pentagonCount.RegisterValueChangedCallback(WorldCountChanged);
             _labButton.clicked += OpenLab;
+            _battleLabButton.clicked += OpenBattleLab;
             RefreshControls();
             CloseMenu();
         }
@@ -108,6 +111,12 @@ namespace SphericalCivilization
             _worldCount?.UnregisterValueChangedCallback(WorldCountChanged);
             _pentagonCount?.UnregisterValueChangedCallback(WorldCountChanged);
             if (_labButton != null) _labButton.clicked -= OpenLab;
+            if (_battleLabButton != null) _battleLabButton.clicked -= OpenBattleLab;
+        }
+
+        private void LateUpdate()
+        {
+            if (_hint != null) _hint.text = Battle.BattlefieldController.ActiveHint ?? Battle.BattlefieldController.SelectionHint;
         }
 
         private void Bind(VisualElement root, string name, Func<float> read, Action<float> write, bool time = false)
@@ -236,6 +245,7 @@ namespace SphericalCivilization
 
         private bool WorldCountChanged() => _worldCount.value != _globe.HexagonSubtileCount || _pentagonCount.value != _globe.PentagonSubtileCount;
         private void OpenLab() => UnityEngine.SceneManagement.SceneManager.LoadScene("SubdivisionLab");
+        private void OpenBattleLab() => Battle.BattlefieldLab.OpenFromGlobe(_globe);
 
         private void RefreshWorldControls()
         {

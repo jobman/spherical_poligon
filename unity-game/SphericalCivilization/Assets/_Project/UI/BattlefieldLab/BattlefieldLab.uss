@@ -1,0 +1,19 @@
+@import url("../CameraControls/CameraControls.uss");
+
+.battle-lab-document { flex-grow: 1; }
+.battle-lab-screen { flex-grow: 1; color: #ecf3fa; font-size: 16px; }
+.battle-lab-header { height: 16%; padding: 18px 28px; }
+.battle-lab-title { font-size: 26px; -unity-font-style: bold; }
+.battle-lab-description { color: #b8c9d7; white-space: normal; margin-top: 6px; }
+.battle-lab-preview { flex-grow: 1; }
+.battle-lab-captions { flex-direction: row; }
+.battle-lab-caption { flex-grow: 1; flex-basis: 0; align-items: center; padding: 8px; }
+.battle-lab-sample-title { -unity-font-style: bold; }
+.battle-lab-sample-count { color: #b8c9d7; font-size: 14px; margin-top: 4px; white-space: normal; -unity-text-align: middle-center; }
+.battle-lab-footer { height: 27%; min-height: 190px; padding: 14px 28px; background-color: #132434; }
+.battle-lab-control { flex-direction: row; align-items: center; }
+.battle-lab-slider-block { flex-grow: 1; margin-right: 24px; }
+.battle-lab-value { color: #d6eabd; -unity-font-style: bold; }
+.battle-lab-actions { flex-direction: row; align-items: center; margin-top: 8px; }
+.battle-lab-actions > .copy-button { min-height: 44px; padding-left: 22px; padding-right: 22px; margin-right: 12px; }
+.battle-lab-status { flex-grow: 1; color: #b4ded1; white-space: normal; }

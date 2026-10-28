@@ -32,6 +32,8 @@ use sprites to reduce content-production work.
 3. Display the tiled sphere with orbit/zoom and cell selection.
 4. Operational subdivision implemented for all 642 regions, with canonical
    shared boundaries and cross-region adjacency; see `SUBTILE_TOPOLOGY.md`.
-5. Open one tactical field and return to the globe.
+5. Tactical preview implemented: two neighboring subtiles on a shared hex grid,
+   three retreat rows, test-token escape and return to the original globe view.
+6. Add actual combat and connect battle outcomes to campaign units.
 
 Do not attempt the entire game or full generator migration in one change.

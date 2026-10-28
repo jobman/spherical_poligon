@@ -11,6 +11,9 @@ EditorBuildSettings:
   - enabled: 1
     path: Assets/_Project/Scenes/SubdivisionLab.unity
     guid: 928c785c8e9d20848a171d35ab6491fe
+  - enabled: 1
+    path: Assets/_Project/Scenes/BattlefieldLab.unity
+    guid: 3fef81e278659e24c80373edd26634fd
   m_configObjects:
     com.unity.input.settings.actions: {fileID: -944628639613478452, guid: 052faaac586de48259a63d0c4782560b, type: 3}
   m_UseUCBPForAssetBundles: 0

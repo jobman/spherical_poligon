@@ -1,0 +1,43 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <ui:Style src="BattlefieldLab.uss" />
+    <ui:VisualElement class="battle-lab-screen" picking-mode="Ignore">
+        <ui:VisualElement class="battle-lab-header" picking-mode="Ignore">
+            <ui:Label text="Лаборатория поля боя" class="battle-lab-title" />
+            <ui:Label text="Три пары соседних субтайлов в одном масштабе. Светлый контур — выпуклая оболочка, снаружи — три ряда для отступления." class="battle-lab-description" />
+        </ui:VisualElement>
+        <ui:VisualElement class="battle-lab-preview" picking-mode="Ignore">
+            <ui:VisualElement class="battle-lab-captions" picking-mode="Ignore">
+                <ui:VisualElement class="battle-lab-caption" picking-mode="Ignore">
+                    <ui:Label name="sampleTitle0" class="battle-lab-sample-title" />
+                    <ui:Label name="sampleCount0" class="battle-lab-sample-count" />
+                </ui:VisualElement>
+                <ui:VisualElement class="battle-lab-caption" picking-mode="Ignore">
+                    <ui:Label name="sampleTitle1" class="battle-lab-sample-title" />
+                    <ui:Label name="sampleCount1" class="battle-lab-sample-count" />
+                </ui:VisualElement>
+                <ui:VisualElement class="battle-lab-caption" picking-mode="Ignore">
+                    <ui:Label name="sampleTitle2" class="battle-lab-sample-title" />
+                    <ui:Label name="sampleCount2" class="battle-lab-sample-count" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+        </ui:VisualElement>
+        <ui:VisualElement class="battle-lab-footer">
+            <ui:VisualElement class="battle-lab-control">
+                <ui:VisualElement class="battle-lab-slider-block">
+                    <ui:VisualElement class="setting-heading">
+                        <ui:Label text="Размер гекса" />
+                        <ui:Label name="hexSizeValue" text="100%" class="battle-lab-value" />
+                    </ui:VisualElement>
+                    <ui:SliderInt name="hexSizeSlider" class="sensitivity-slider" low-value="30" high-value="300" value="100" page-size="1" tooltip="Вправо — крупнее гексы и меньше клеток. Влево — мельче и больше клеток." />
+                </ui:VisualElement>
+                <ui:Label text="Мельче ← → Крупнее" />
+            </ui:VisualElement>
+            <ui:Label text="Один размер гекса для всех полей боя. Изменения применятся к новым боям только после сохранения." class="battle-lab-description" />
+            <ui:VisualElement class="battle-lab-actions">
+                <ui:Button name="saveBattleSizeButton" text="Сохранить" class="copy-button primary-button" />
+                <ui:Button name="backToGlobeButton" text="К глобусу" class="copy-button" />
+                <ui:Label name="battleLabStatus" text="Подготовка примеров…" class="battle-lab-status" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+    </ui:VisualElement>
+</ui:UXML>

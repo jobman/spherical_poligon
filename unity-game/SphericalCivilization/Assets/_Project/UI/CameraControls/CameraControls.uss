@@ -139,6 +139,8 @@
     background-color: rgba(3, 9, 16, 0.7);
 }
 .menu-hint {
+    max-width: 94%;
+    white-space: normal;
     position: absolute;
     left: 20px;
     bottom: 20px;

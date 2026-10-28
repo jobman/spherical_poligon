@@ -5,9 +5,11 @@ Shader "SphericalCivilization/VertexTerrain"
         _BorderColor ("Border color", Color) = (0.002, 0.0035, 0.0044, 1)
         _BorderWidth ("Border width (pixels)", Range(0, 4)) = 1
         _SelectionColor ("Selection color", Color) = (1, 0.49, 0.027, 1)
+        _AttackTargetColor ("Attack target color", Color) = (1, 0.08, 0.14, 1)
         _SelectionWidth ("Selection width (pixels)", Range(1, 8)) = 3
         [HideInInspector] _SelectedTileId ("Selected tile", Float) = -1
         [HideInInspector] _SelectedSubtileId ("Selected subtile", Float) = -1
+        [HideInInspector] _AttackTargetSubtileId ("Attack target subtile", Float) = -1
         [HideInInspector] _SubtileVisibility ("Subtile visibility", Float) = 0
     }
     SubShader
@@ -26,10 +28,12 @@ Shader "SphericalCivilization/VertexTerrain"
             CBUFFER_START(UnityPerMaterial)
                 half4 _BorderColor;
                 half4 _SelectionColor;
+                half4 _AttackTargetColor;
                 float _BorderWidth;
                 float _SelectionWidth;
                 float _SelectedTileId;
                 float _SelectedSubtileId;
+                float _AttackTargetSubtileId;
                 float _SubtileVisibility;
             CBUFFER_END
 
@@ -90,16 +94,19 @@ Shader "SphericalCivilization/VertexTerrain"
                 float3 parentB = input.parentDistancesB / max(sqrt(parentDxB * parentDxB + parentDyB * parentDyB), 0.00000001);
                 float parentBorder = min(min(parentA.x, min(parentA.y, parentA.z)), min(parentB.x, min(parentB.y, parentB.z)));
                 half3 terrain = input.color.rgb * illumination;
+                bool selectedCell = abs(input.regions.w - _SelectedSubtileId) < 0.5;
+                bool attackTarget = abs(input.regions.w - _AttackTargetSubtileId) < 0.5;
+                terrain = lerp(terrain, _SelectionColor.rgb, selectedCell * 0.18);
+                terrain = lerp(terrain, _AttackTargetColor.rgb, attackTarget * 0.28);
                 half fineCoverage = (1.0 - smoothstep(0.0, 0.85, cellBorder)) * _SubtileVisibility;
                 terrain = lerp(terrain, terrain * 0.35, fineCoverage);
                 bool selected = abs(input.borders.w - _SelectedTileId) < 0.5 &&
-                    (_SelectedSubtileId < 0.0 || _SubtileVisibility < 0.65);
+                    _SelectedSubtileId < 0.0;
                 float width = selected ? _SelectionWidth : _BorderWidth * 0.5;
                 half coverage = (1.0 - smoothstep(max(0.0, width - 0.5), width + 0.5, parentBorder)) * (width > 0.0);
                 terrain = lerp(terrain, selected ? _SelectionColor.rgb : _BorderColor.rgb, coverage);
-                bool selectedCell = abs(input.regions.w - _SelectedSubtileId) < 0.5 && _SubtileVisibility >= 0.65;
-                half cellCoverage = (1.0 - smoothstep(_SelectionWidth - 0.5, _SelectionWidth + 0.5, cellBorder)) * selectedCell;
-                return half4(lerp(terrain, _SelectionColor.rgb, cellCoverage), 1.0);
+                half cellCoverage = (1.0 - smoothstep(_SelectionWidth - 0.5, _SelectionWidth + 0.5, cellBorder)) * (selectedCell || attackTarget);
+                return half4(lerp(terrain, attackTarget ? _AttackTargetColor.rgb : _SelectionColor.rgb, cellCoverage), 1.0);
             }
             ENDHLSL
         }

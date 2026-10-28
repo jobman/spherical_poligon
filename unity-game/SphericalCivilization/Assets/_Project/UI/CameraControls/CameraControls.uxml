@@ -10,6 +10,7 @@
                     <ui:Button name="settingsButton" text="Настройки" class="copy-button menu-button" />
                     <ui:Button name="worldButton" text="Карта" class="copy-button menu-button" />
                     <ui:Button name="labButton" text="Подбор субтайлов" class="copy-button menu-button" />
+                    <ui:Button name="battleLabButton" text="Подбор поля боя" class="copy-button menu-button" />
                     <ui:Label text="Esc — вернуться к игре" class="camera-footer" />
                 </ui:VisualElement>
                 <ui:VisualElement name="worldPage" class="world-page">

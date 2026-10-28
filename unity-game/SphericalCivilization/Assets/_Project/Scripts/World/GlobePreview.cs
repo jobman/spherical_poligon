@@ -24,6 +24,8 @@ namespace SphericalCivilization
         public int SelectedTileId { get; private set; } = -1;
         public int SelectedSubtileIndex { get; private set; } = -1;
         public long? SelectedSubtileId => SelectedSubtileIndex >= 0 ? _topology.Subtiles[SelectedSubtileIndex].Id : null;
+        public int AttackTargetSubtileIndex { get; private set; } = -1;
+        public long? AttackTargetSubtileId => AttackTargetSubtileIndex >= 0 ? _topology.Subtiles[AttackTargetSubtileIndex].Id : null;
         public int TriangleCount => _triangleSubtiles.Count;
         public OperationalWorld Topology => _topology;
         public float SubtileVisibility => _visibility;
@@ -35,6 +37,7 @@ namespace SphericalCivilization
         private readonly List<int> _triangleSubtiles = new();
         private static readonly int SelectedTileProperty = Shader.PropertyToID("_SelectedTileId");
         private static readonly int SelectedSubtileProperty = Shader.PropertyToID("_SelectedSubtileId");
+        private static readonly int AttackTargetProperty = Shader.PropertyToID("_AttackTargetSubtileId");
         private static readonly int SubtileVisibilityProperty = Shader.PropertyToID("_SubtileVisibility");
 
         private void OnEnable()
@@ -150,9 +153,35 @@ namespace SphericalCivilization
         public bool TrySelectRay(Ray ray)
         {
             if (!TryGetSubtile(ray, out var cell)) return false;
-            if (_visibility >= 0.65f) SelectSubtile(cell.Id);
-            else SelectTile(cell.ParentTileId);
+            SelectSubtile(cell.Id);
             return true;
+        }
+
+        public bool TrySetAttackTargetRay(Ray ray)
+        {
+            if (TryGetSubtile(ray, out var cell)) return TrySetAttackTarget(cell.Id);
+            ClearAttackTarget();
+            return false;
+        }
+
+        public bool TrySetAttackTarget(long id)
+        {
+            if (_topology == null || SelectedSubtileIndex < 0 ||
+                !_topology.SubtileIndicesById.TryGetValue(id, out int index) ||
+                Array.IndexOf(_topology.Subtiles[SelectedSubtileIndex].Neighbors, index) < 0)
+            {
+                ClearAttackTarget();
+                return false;
+            }
+            AttackTargetSubtileIndex = index;
+            UpdateProperties();
+            return true;
+        }
+
+        public void ClearAttackTarget()
+        {
+            AttackTargetSubtileIndex = -1;
+            UpdateProperties();
         }
 
         public bool TryGetSubtile(Ray ray, out OperationalSubtile cell)
@@ -170,6 +199,7 @@ namespace SphericalCivilization
             if (_topology == null || !_topology.TilesById.ContainsKey(id)) throw new ArgumentOutOfRangeException(nameof(id));
             SelectedTileId = id;
             SelectedSubtileIndex = -1;
+            AttackTargetSubtileIndex = -1;
             UpdateProperties();
         }
 
@@ -178,12 +208,14 @@ namespace SphericalCivilization
             if (_topology == null || !_topology.SubtileIndicesById.TryGetValue(id, out int index)) throw new ArgumentOutOfRangeException(nameof(id));
             SelectedSubtileIndex = index;
             SelectedTileId = _topology.Subtiles[index].ParentTileId;
+            AttackTargetSubtileIndex = -1;
             UpdateProperties();
         }
 
         public void ClearSelection()
         {
             SelectedTileId = SelectedSubtileIndex = -1;
+            AttackTargetSubtileIndex = -1;
             UpdateProperties();
         }
 
@@ -204,6 +236,7 @@ namespace SphericalCivilization
             renderer.GetPropertyBlock(_properties);
             _properties.SetFloat(SelectedTileProperty, SelectedTileId);
             _properties.SetFloat(SelectedSubtileProperty, SelectedSubtileIndex);
+            _properties.SetFloat(AttackTargetProperty, AttackTargetSubtileIndex);
             _properties.SetFloat(SubtileVisibilityProperty, Mathf.Max(0f, _visibility));
             renderer.SetPropertyBlock(_properties);
         }
@@ -218,6 +251,7 @@ namespace SphericalCivilization
             }
             _surface = null;
             _topology = null;
+            SelectedTileId = SelectedSubtileIndex = AttackTargetSubtileIndex = -1;
             _triangleSubtiles.Clear();
         }
     }

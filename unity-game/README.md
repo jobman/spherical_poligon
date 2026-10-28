@@ -83,14 +83,14 @@ colors. Tile borders and selection are drawn by the terrain shader on the same
 surface, so they stay aligned with color seams even at the closest oblique view.
 Borders have a stable pixel width; internal triangulation edges remain hidden.
 The globe needs one mesh renderer and no elevated line geometry. The generator
-itself, tactical fields, units, and game rules have not yet been ported. The
+itself and campaign game rules have not yet been ported. The
 runtime requests a 60 FPS frame-rate limit.
 
 Operational subdivision now creates 23,754 irregular Voronoi subtiles inside the 642
 parent regions. Neighbors share the same canonical boundary vertices and have
 reciprocal links across parent borders, including pentagons. Fine borders fade
-in as the camera approaches; clicking nearby selects a subtile, while distant
-clicks select the parent. Subtiles currently inherit parent terrain and color.
+in as the camera approaches; left-click selects a subtile at any distance.
+Right-click chooses an adjacent attack target. Subtiles currently inherit parent terrain and color.
 Esc > `Карта` sets separate exact counts of 12–128 subtiles for hexagons and
 pentagons (both default to 37). `Применить` regenerates the map once; `Сохранить` also stores the counts for
 future launches in `WorldSettings.json`, separately from camera preferences.
@@ -106,6 +106,25 @@ Apply to globe saves and opens the main world with those counts. The Editor menu
 `Spherical Civilization > Open subdivision lab` also opens it. See
 [the lab guide](docs/SUBDIVISION_LAB.md). Development and previews run inside the
 Unity Editor; standalone executable builds are deferred at the user's request.
+
+In the globe scene, **left-click** chooses your subtile (orange), **right-click**
+chooses an adjacent attack target (red), and **Space** opens a test battlefield
+on exactly that pair. Invalid targets and changing the source clear the target;
+there is no automatic pair selection. The playable area is the convex hull around
+both subtiles, including the filled gaps between them. It uses the same hex size,
+with exactly three retreat
+rows and fading surrounding subtile outlines. Two test tokens can be selected
+and moved with the left mouse button; reaching row 3 marks one as escaped.
+Drag/WASD pans and the wheel zooms. Space/Esc returns to the unchanged globe
+view. Entry preserves the screen orientation of the shared boundary, including
+after Q/E turns and near poles. See [the tactical preview](docs/BATTLEFIELD.md).
+
+Esc > `Подбор поля боя` opens the separate `BattlefieldLab` scene with three
+neighboring subtile pairs at a common geographic scale. One size slider updates
+all examples. Save writes a fixed hex radius to `BattleSettings.json`; each new
+battle reads it immediately. Returning without saving leaves battle settings
+unchanged. See [the battle lab](docs/BATTLEFIELD_LAB.md).
+These are test tokens; combat resolution and campaign armies remain future work.
 
 ## Development
 

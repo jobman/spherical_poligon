@@ -65,8 +65,23 @@ or the Editor menu `Spherical Civilization > Open subdivision lab`. It shows
 three real examples of each shape at the same scale and regenerates only six
 interiors when either slider changes. Save/Copy/Apply to globe use independent
 hexagon and pentagon counts. `docs/SUBDIVISION_LAB.md` describes the workflow.
-Both scenes are enabled in Build Settings, with Globe still the default first scene.
-Tactical combat remains a future milestone. The terrain generator still
+The globe and subdivision lab are enabled in Build Settings, with Globe still first.
+The third scene, `BattlefieldLab`, is available through Esc > `Подбор поля боя`
+and `Spherical Civilization > Open battlefield lab`. It compares three real
+adjacent pairs at one geographic scale; its size slider rebuilds only the fields.
+Save persists one fixed radius in `BattleSettings.json`, read on every new battle.
+Preview changes alone do not alter saved settings. See `docs/BATTLEFIELD_LAB.md`.
+Left-click selects your subtile, right-click selects an adjacent attack target;
+Space opens a battle only for that explicit pair. The source is orange and the
+target red. Changing source or choosing an invalid target clears the target.
+Dragging still rotates the globe without selecting. The playable hex field covers
+the convex hull of both source subtiles, with their outlines retained and gaps
+filled at the same hex size. Three retreat rows start outside this hull, with fading
+surrounding geography and two movable test tokens. Row 3 counts as escape.
+Space/Esc returns to the same globe pose; screen rotation is retained on entry.
+The geometry and view API checks passed, including cross-region boundaries,
+polar/rolled views, exact ring distances and escape behavior. See
+`docs/BATTLEFIELD.md`. Actual combat and campaign armies remain future work. The terrain generator still
 lives in the Python prototype.
 
 The scene uses a directional sun, URP HDR, ACES tonemapping, subtle bloom, and a
